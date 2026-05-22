@@ -12,7 +12,7 @@ export const resources = {
         home: 'Início',
       },
       brand: {
-        name: 'Coração Bank',
+        name: 'Banco Coração',
       },
       forms: {
         name: {

@@ -8,7 +8,7 @@ export function AppLayout({ children }: PropsWithChildren) {
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <AppHeader />
-      <Layout.Content style={{ padding: 24 }}>{children}</Layout.Content>
+      <Layout.Content style={{ padding: 14 }}>{children}</Layout.Content>
       <AppFooter />
     </Layout>
   );

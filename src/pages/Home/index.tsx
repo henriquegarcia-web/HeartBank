@@ -1,120 +1,106 @@
-import { zodResolver } from '@hookform/resolvers/zod';
-import { Card, Flex, Form, Typography } from 'antd';
-import { useMemo } from 'react';
-import { useForm } from 'react-hook-form';
-import { useTranslation } from 'react-i18next';
-import { z } from 'zod';
+import { App, Button, Card, Flex, Form, Input, Typography } from 'antd';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-import {
-  PasswordInput,
-  SelectInput,
-  SubmitButton,
-  TextInput,
-} from '@/components/forms';
+import { createRoom, enterRoomByCode, GameError } from '@/api/gameService';
 import { AppLayout } from '@/components/ui';
-import { isFullName } from '@/utils/validators';
+
+const CREATOR_ROOM_CODE_KEY = 'coracao-bank.creator-room-code';
 
 export function Home() {
-  const { t } = useTranslation();
+  const { message } = App.useApp();
+  const navigate = useNavigate();
+  const [roomCode, setRoomCode] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [isEntering, setIsEntering] = useState(false);
 
-  const schema = useMemo(
-    () =>
-      z.object({
-        name: z
-          .string()
-          .min(1, t('validation.required'))
-          .refine(isFullName, t('validation.invalidFullName')),
-        email: z
-          .string()
-          .min(1, t('validation.required'))
-          .email(t('validation.invalidEmail')),
-        password: z.string().min(6, t('validation.minPassword')),
-        profileType: z.string().min(1, t('validation.required')),
-      }),
-    [t],
-  );
+  const handleCreateRoom = async () => {
+    setIsCreating(true);
 
-  type HomeFormValues = z.infer<typeof schema>;
+    try {
+      const room = await createRoom();
+      sessionStorage.setItem(CREATOR_ROOM_CODE_KEY, room.code);
+      navigate(`/sala/${room.code}/nome`);
+    } catch (error) {
+      message.error(
+        error instanceof GameError
+          ? error.message
+          : 'Nao foi possivel criar a sessao.',
+      );
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
-  const { control, handleSubmit } = useForm<HomeFormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      name: '',
-      email: '',
-      password: '',
-      profileType: '',
-    },
-  });
+  const handleEnterRoom = async () => {
+    setIsEntering(true);
 
-  const profileOptions = [
-    {
-      label: t('forms.profileType.customer'),
-      value: 'customer',
-    },
-    {
-      label: t('forms.profileType.manager'),
-      value: 'manager',
-    },
-  ];
-
-  const handleFormSubmit = (values: HomeFormValues) => {
-    console.info(values);
+    try {
+      const room = await enterRoomByCode(roomCode);
+      navigate(`/sala/${room.code}/nome`);
+    } catch (error) {
+      message.error(
+        error instanceof GameError ? error.message : 'Sessao nao encontrada.',
+      );
+    } finally {
+      setIsEntering(false);
+    }
   };
 
   return (
     <AppLayout>
-      <Flex vertical gap={24}>
-        <Flex vertical gap={4}>
-          <Typography.Title level={1} style={{ margin: 0 }}>
-            {t('pages.home.title')}
-          </Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-            {t('pages.home.subtitle')}
-          </Typography.Paragraph>
-        </Flex>
+      <Flex
+        align="center"
+        justify="center"
+        style={{ minHeight: 'calc(100vh - 160px)' }}
+      >
+        <Card style={{ width: '100%', maxWidth: 420 }}>
+          <Flex vertical gap={24}>
+            <Flex vertical gap={4}>
+              <Typography.Title level={1} style={{ margin: 0 }}>
+                Banco Imobiliario
+              </Typography.Title>
+              <Typography.Text type="secondary">
+                Controle o dinheiro da mesa por sessao.
+              </Typography.Text>
+            </Flex>
 
-        <Card
-          title={t('pages.home.cardTitle')}
-          styles={{ body: { maxWidth: 520 } }}
-        >
-          <Typography.Paragraph type="secondary">
-            {t('pages.home.cardDescription')}
-          </Typography.Paragraph>
+            <Button
+              block
+              size="large"
+              type="primary"
+              loading={isCreating}
+              onClick={handleCreateRoom}
+            >
+              Criar sessao
+            </Button>
 
-          <Form
-            layout="vertical"
-            onFinish={handleSubmit(handleFormSubmit)}
-            requiredMark={false}
-          >
-            <TextInput
-              control={control}
-              name="name"
-              label={t('forms.name.label')}
-              placeholder={t('forms.name.placeholder')}
-            />
-            <TextInput
-              control={control}
-              name="email"
-              label={t('forms.email.label')}
-              placeholder={t('forms.email.placeholder')}
-            />
-            <PasswordInput
-              control={control}
-              name="password"
-              label={t('forms.password.label')}
-              placeholder={t('forms.password.placeholder')}
-            />
-            <SelectInput
-              control={control}
-              name="profileType"
-              label={t('forms.profileType.label')}
-              placeholder={t('forms.profileType.placeholder')}
-              options={profileOptions}
-            />
-            <SubmitButton label={t('common.submit')} />
-          </Form>
+            <Form layout="vertical" requiredMark={false} onFinish={handleEnterRoom}>
+              <Form.Item label="Codigo da sessao" htmlFor="room-code" required>
+                <Input
+                  id="room-code"
+                  size="large"
+                  value={roomCode}
+                  placeholder="ABC123"
+                  onChange={(event) =>
+                    setRoomCode(event.target.value.toUpperCase())
+                  }
+                />
+              </Form.Item>
+              <Button
+                block
+                size="large"
+                htmlType="submit"
+                loading={isEntering}
+              >
+                Entrar em sessao
+              </Button>
+            </Form>
+          </Flex>
         </Card>
       </Flex>
     </AppLayout>
   );
 }
+
+export { CREATOR_ROOM_CODE_KEY };
