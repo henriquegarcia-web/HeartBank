@@ -16,16 +16,11 @@ describe('Home', () => {
     renderWithProviders(<Home />);
 
     expect(
-      screen.getByRole('heading', {
-        name: 'Banco Imobiliario',
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Criar sessao' }),
+      screen.getByRole('button', { name: 'Criar sessão' }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Codigo da sessao')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Entrar em sessao' }),
+      screen.getByRole('button', { name: 'Entrar em sessão' }),
     ).toBeInTheDocument();
   });
 });

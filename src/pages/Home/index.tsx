@@ -56,15 +56,6 @@ export function Home() {
       >
         <Card style={{ width: '100%', maxWidth: 420 }}>
           <Flex vertical gap={24}>
-            {/* <Flex vertical gap={4}>
-              <Typography.Title level={1} style={{ margin: 0 }}>
-                Banco Imobiliario
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                Controle o dinheiro da mesa por sessao.
-              </Typography.Text>
-            </Flex> */}
-
             <Button
               block
               size="large"

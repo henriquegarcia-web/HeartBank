@@ -395,11 +395,14 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
-                        <Form.Item name="reason" label="Motivo">
+                        <Form.Item
+                          name="reason"
+                          label="Motivo"
+                          rules={[{ required: true, message: 'Escolha o motivo.' }]}
+                        >
                           <Select
-                            allowClear
                             options={REASON_OPTIONS}
-                            placeholder="Opcional"
+                            placeholder="Selecione o motivo"
                           />
                         </Form.Item>
                         <Flex gap={8} justify="end">
@@ -416,7 +419,7 @@ export function GameRoom() {
                   </Col>
 
                   <Col xs={24} lg={12}>
-                    <Card title="Pagar banco">
+                    <Card title="Pagar Banco">
                       <Form
                         form={bankPaymentForm}
                         layout="vertical"
@@ -437,11 +440,14 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
-                        <Form.Item name="reason" label="Motivo">
+                        <Form.Item
+                          name="reason"
+                          label="Motivo"
+                          rules={[{ required: true, message: 'Escolha o motivo.' }]}
+                        >
                           <Select
-                            allowClear
                             options={REASON_OPTIONS}
-                            placeholder="Opcional"
+                            placeholder="Selecione o motivo"
                           />
                         </Form.Item>
                         <Flex gap={8} justify="end">
@@ -458,7 +464,7 @@ export function GameRoom() {
                   </Col>
 
                   <Col span={24}>
-                    <Card title="Historico individual">
+                    <Card title="Historico Individual">
                       <TransactionHistoryList
                         transactions={personalTransactions}
                         players={state?.players ?? []}
@@ -515,11 +521,19 @@ export function GameRoom() {
                                   prefix="R$"
                                 />
                               </Form.Item>
-                              <Form.Item name="reason" label="Motivo">
+                              <Form.Item
+                                name="reason"
+                                label="Motivo"
+                                rules={[
+                                  {
+                                    required: true,
+                                    message: 'Escolha o motivo.',
+                                  },
+                                ]}
+                              >
                                 <Select
-                                  allowClear
                                   options={REASON_OPTIONS}
-                                  placeholder="Opcional"
+                                  placeholder="Selecione o motivo"
                                 />
                               </Form.Item>
                               <Flex gap={8} justify="end">
@@ -556,7 +570,7 @@ export function GameRoom() {
                           </Card>
                         </Col>
                         <Col span={24}>
-                          <Card title="Historico geral">
+                          <Card title="Historico Geral">
                             <TransactionHistoryList
                               transactions={state?.transactions ?? []}
                               players={state?.players ?? []}
