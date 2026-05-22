@@ -1,4 +1,4 @@
-import { App, Button, Card, Flex, Form, Input, Typography } from 'antd';
+import { App, Button, Card, Flex, Form, Input } from 'antd';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -56,14 +56,14 @@ export function Home() {
       >
         <Card style={{ width: '100%', maxWidth: 420 }}>
           <Flex vertical gap={24}>
-            <Flex vertical gap={4}>
+            {/* <Flex vertical gap={4}>
               <Typography.Title level={1} style={{ margin: 0 }}>
                 Banco Imobiliario
               </Typography.Title>
               <Typography.Text type="secondary">
                 Controle o dinheiro da mesa por sessao.
               </Typography.Text>
-            </Flex>
+            </Flex> */}
 
             <Button
               block
@@ -72,10 +72,14 @@ export function Home() {
               loading={isCreating}
               onClick={handleCreateRoom}
             >
-              Criar sessao
+              Criar sessão
             </Button>
 
-            <Form layout="vertical" requiredMark={false} onFinish={handleEnterRoom}>
+            <Form
+              layout="vertical"
+              requiredMark={false}
+              onFinish={handleEnterRoom}
+            >
               <Form.Item label="Codigo da sessao" htmlFor="room-code" required>
                 <Input
                   id="room-code"
@@ -87,13 +91,8 @@ export function Home() {
                   }
                 />
               </Form.Item>
-              <Button
-                block
-                size="large"
-                htmlType="submit"
-                loading={isEntering}
-              >
-                Entrar em sessao
+              <Button block size="large" htmlType="submit" loading={isEntering}>
+                Entrar em sessão
               </Button>
             </Form>
           </Flex>
