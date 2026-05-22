@@ -245,6 +245,16 @@ export const moveMoney = async ({
     throw new GameError('Nao e permitido fazer Pix para si mesmo.');
   }
 
+  if (type === 'PLAYER_TO_BANK') {
+    if (!fromPlayerId || toPlayerId) {
+      throw new GameError('Pagamento ao banco deve sair de um jogador.');
+    }
+
+    if (executedByPlayerId !== fromPlayerId) {
+      throw new GameError('Jogador so pode pagar ao banco com o proprio saldo.');
+    }
+  }
+
   if (type === 'BANK_TO_PLAYER' || type === 'BANK_CHARGE_PLAYER') {
     assertBanker(executedByPlayer);
   }
