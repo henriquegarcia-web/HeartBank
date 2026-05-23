@@ -852,6 +852,8 @@ export const payJailBail = async ({
     throw new GameError('A fiança ainda não foi liberada.');
   }
 
+  assertCanDebit(player, JAIL_BAIL_AMOUNT);
+
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
     [`players/${playerId}/is_jailed`]: false,

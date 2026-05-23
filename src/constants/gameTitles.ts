@@ -434,7 +434,7 @@ export const AVAILABLE_TITLES = {
       kind: 'STOCK',
       name: 'Petroleira',
       color: '#30343b',
-      image_url: '/acao_petroileira.png',
+      image_url: '/acao_petroleira.png',
       purchase_price: 1000,
       multiplier: 500,
     },

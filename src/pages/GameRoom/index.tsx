@@ -21,18 +21,25 @@
 } from 'antd';
 import type { FormInstance } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
+  LuCalculator,
   LuCircleDollarSign,
   LuDices,
-  LuGrid2X2,
+  LuHistory,
   LuHouse,
   LuHotel,
   LuLock,
   LuLockOpen,
+  LuMedal,
+  LuLandmark,
+  LuScrollText,
+  LuTrophy,
   LuWallet,
 } from 'react-icons/lu';
+import { GiHandcuffs } from 'react-icons/gi';
 
 import {
   acceptPendingRequest,
@@ -120,6 +127,20 @@ type TitleActionModal = {
 } | null;
 
 type DebtPaymentModal = FirebaseRecord<Debt> | null;
+type GameTabKey =
+  | 'player'
+  | 'loans'
+  | 'titles'
+  | 'ranking'
+  | 'calculator'
+  | 'history'
+  | 'banker';
+
+type GameNavigationItem = {
+  key: GameTabKey;
+  label: string;
+  icon: ReactNode;
+};
 
 const QUICK_AMOUNTS = [20, 50, 100, 500, 1000];
 
@@ -451,6 +472,7 @@ export function GameRoom() {
     useState<TitleActionModal>(null);
   const [debtPaymentModal, setDebtPaymentModal] =
     useState<DebtPaymentModal>(null);
+  const [activeTabKey, setActiveTabKey] = useState<GameTabKey>('player');
   const [selectedTitleId, setSelectedTitleId] = useState<string>();
   const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
   const seenTransactionIdsRef = useRef<Set<string>>(new Set());
@@ -560,6 +582,21 @@ export function GameRoom() {
     () => state?.players.find((player) => player.id === playerId) ?? null,
     [playerId, state?.players],
   );
+  const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
+  const canUseBankMenuWhileJailed =
+    isCurrentPlayerJailed && (currentPlayer?.is_banker ?? false);
+
+  useEffect(() => {
+    if (activeTabKey === 'banker' && !currentPlayer?.is_banker) {
+      setActiveTabKey('player');
+    }
+  }, [activeTabKey, currentPlayer?.is_banker]);
+
+  useEffect(() => {
+    if (canUseBankMenuWhileJailed && activeTabKey !== 'banker') {
+      setActiveTabKey('banker');
+    }
+  }, [activeTabKey, canUseBankMenuWhileJailed]);
 
   const playerOptions = useMemo(
     () =>
@@ -1106,6 +1143,23 @@ export function GameRoom() {
     ),
     content: <Space wrap></Space>,
   }));
+  const navigationItems: GameNavigationItem[] = [
+    { key: 'player', label: 'Principal', icon: <LuWallet /> },
+    { key: 'loans', label: 'Empréstimos', icon: <LuLandmark /> },
+    { key: 'titles', label: 'Títulos', icon: <LuScrollText /> },
+    { key: 'ranking', label: 'Ranking', icon: <LuTrophy /> },
+    { key: 'calculator', label: 'Calculadora', icon: <LuCalculator /> },
+    { key: 'history', label: 'Histórico', icon: <LuHistory /> },
+    ...(currentPlayer?.is_banker
+      ? [
+          {
+            key: 'banker' as const,
+            label: 'Banco',
+            icon: <LuMedal />,
+          },
+        ]
+      : []),
+  ];
 
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
@@ -1488,7 +1542,7 @@ export function GameRoom() {
 
   return (
     <AppLayout>
-      <Flex vertical gap={24}>
+      <Flex vertical gap={24} style={{ paddingBottom: 104 }}>
         <Row gutter={[16, 16]}>
           <Col xs={24} lg={16}>
             <Card loading={isLoading}>
@@ -1530,6 +1584,8 @@ export function GameRoom() {
         </Row>
 
         <Tabs
+          activeKey={activeTabKey}
+          renderTabBar={() => <></>}
           items={[
             {
               key: 'player',
@@ -1994,6 +2050,82 @@ export function GameRoom() {
         />
       </Flex>
 
+      <nav
+        aria-label="Navegação principal"
+        style={{
+          position: 'fixed',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 1000,
+          display: 'grid',
+          gridTemplateColumns: `repeat(${navigationItems.length}, minmax(0, 1fr))`,
+          gap: 1,
+          minHeight: 56,
+          padding: '10px 14px',
+          // borderRadius: 18,
+          background: 'rgba(255, 255, 255, 0.96)',
+          boxShadow: '0 10px 30px rgba(0, 0, 0, 0.14)',
+          border: '1px solid rgba(0, 0, 0, 0.06)',
+        }}
+      >
+        {navigationItems.map((item) => {
+          const isSelected = activeTabKey === item.key;
+          const isDisabled =
+            isCurrentPlayerJailed &&
+            !(currentPlayer?.is_banker && item.key === 'banker');
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              disabled={isDisabled}
+              aria-current={isSelected ? 'page' : undefined}
+              onClick={() => setActiveTabKey(item.key)}
+              style={{
+                display: 'flex',
+                minWidth: 0,
+                minHeight: 52,
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                border: 0,
+                borderRadius: 8,
+                background: isSelected ? 'rgba(216, 24, 96, 0.1)' : 'none',
+                color: isSelected ? '#d81860' : 'rgba(0, 0, 0, 0.62)',
+                opacity: isDisabled ? 0.42 : 1,
+                cursor: isDisabled ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <span style={{ display: 'flex', fontSize: 22 }}>{item.icon}</span>
+              <span
+                style={{
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 8,
+                  lineHeight: 1.1,
+                  fontWeight: isSelected ? 700 : 500,
+                }}
+              >
+                {item.label}
+              </span>
+              {/* <span
+                aria-hidden
+                style={{
+                  width: 20,
+                  height: 3,
+                  borderRadius: 999,
+                  background: isSelected ? '#d81860' : 'transparent',
+                }}
+              /> */}
+            </button>
+          );
+        })}
+      </nav>
+
       {currentPlayer?.is_jailed ? (
         <Flex
           vertical
@@ -2010,7 +2142,7 @@ export function GameRoom() {
             textAlign: 'center',
           }}
         >
-          <LuGrid2X2 size={72} color="#fff" aria-hidden />
+          <GiHandcuffs size={72} color="#fff" aria-hidden />
           <Typography.Title level={2} style={{ color: '#fff', margin: 0 }}>
             Você está preso
           </Typography.Title>
@@ -2018,15 +2150,25 @@ export function GameRoom() {
             Aguarde o banqueiro liberar sua fiança ou soltar você.
           </Typography.Text>
           {currentPlayer.is_bail_available ? (
-            <Button
-              size="large"
-              type="primary"
-              icon={<LuCircleDollarSign />}
-              loading={isSubmitting}
-              onClick={handlePayJailBail}
-            >
-              Pagar fiança de {formatCurrency(JAIL_BAIL_AMOUNT)}
-            </Button>
+            <>
+              {(currentPlayer.balance ?? 0) < JAIL_BAIL_AMOUNT ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Saldo insuficiente para pagar a fiança."
+                />
+              ) : null}
+              <Button
+                size="large"
+                type="primary"
+                icon={<LuCircleDollarSign />}
+                loading={isSubmitting}
+                disabled={(currentPlayer.balance ?? 0) < JAIL_BAIL_AMOUNT}
+                onClick={handlePayJailBail}
+              >
+                Pagar fiança de {formatCurrency(JAIL_BAIL_AMOUNT)}
+              </Button>
+            </>
           ) : null}
         </Flex>
       ) : null}
