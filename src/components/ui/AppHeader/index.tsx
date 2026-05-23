@@ -1,10 +1,16 @@
-import { Button, Layout } from 'antd';
+import { Button, Layout, Typography } from 'antd';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { LuArrowLeft } from 'react-icons/lu';
+import { FaHeart } from 'react-icons/fa';
 
 import { Logo } from '../Logo';
+import { tokens } from '@/styles/tokens';
 
-export function AppHeader() {
+type AppHeaderProps = {
+  title?: string;
+};
+
+export function AppHeader({ title }: AppHeaderProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const canGoHome = location.pathname !== '/';
@@ -33,7 +39,19 @@ export function AppHeader() {
           style={{ left: 14, position: 'absolute' }}
         />
       ) : null}
-      <Logo />
+      {title ? (
+        <>
+          <Typography.Text strong>{title}</Typography.Text>
+          <FaHeart
+            color={tokens.colors.primary}
+            aria-hidden
+            size={20}
+            style={{ position: 'absolute', right: 20 }}
+          />
+        </>
+      ) : (
+        <Logo />
+      )}
     </Layout.Header>
   );
 }

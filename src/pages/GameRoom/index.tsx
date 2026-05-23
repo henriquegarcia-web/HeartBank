@@ -1160,6 +1160,9 @@ export function GameRoom() {
         ]
       : []),
   ];
+  const activeNavigationLabel =
+    navigationItems.find((item) => item.key === activeTabKey)?.label ??
+    'Principal';
 
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
@@ -1549,7 +1552,7 @@ export function GameRoom() {
   };
 
   return (
-    <AppLayout>
+    <AppLayout headerTitle={activeNavigationLabel}>
       <Flex vertical gap={24} style={{ paddingBottom: 104 }}>
         <Tabs
           activeKey={activeTabKey}
