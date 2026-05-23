@@ -23,7 +23,16 @@ import type { FormInstance } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import { LuDices, LuHouse, LuHotel, LuWallet } from 'react-icons/lu';
+import {
+  LuCircleDollarSign,
+  LuDices,
+  LuGrid2X2,
+  LuHouse,
+  LuHotel,
+  LuLock,
+  LuLockOpen,
+  LuWallet,
+} from 'react-icons/lu';
 
 import {
   acceptPendingRequest,
@@ -36,9 +45,13 @@ import {
   deleteRoom,
   enterRoomByCode,
   GameError,
+  JAIL_BAIL_AMOUNT,
   moveMoney,
   payDebt,
+  payJailBail,
+  releasePlayerBail,
   requestTitlePurchase,
+  setPlayerJailStatus,
   subscribeRoomSnapshot,
   upgradePurchasedTitle,
 } from '@/api/gameService';
@@ -110,12 +123,10 @@ type DebtPaymentModal = FirebaseRecord<Debt> | null;
 
 const QUICK_AMOUNTS = [20, 50, 100, 500, 1000];
 
-const BANK_PAYMENT_REASON_OPTIONS = ['Notícia', 'Imposto', 'Fiança'].map(
-  (reason) => ({
-    label: reason,
-    value: reason,
-  }),
-);
+const BANK_PAYMENT_REASON_OPTIONS = ['Notícia', 'Imposto'].map((reason) => ({
+  label: reason,
+  value: reason,
+}));
 
 const BANK_ACTION_REASON_OPTIONS = [
   'Notícia',
@@ -125,6 +136,11 @@ const BANK_ACTION_REASON_OPTIONS = [
   label: reason,
   value: reason,
 }));
+const PRESET_REASON_AMOUNTS: Record<string, number> = {
+  Imposto: 2000,
+  'Bônus de Rodada': 2000,
+  'Restituição do Imposto': 2000,
+};
 
 const DICE_OPTIONS = Array.from({ length: 12 }, (_, index) => {
   const value = index + 1;
@@ -194,7 +210,13 @@ const playPixAudio = () => {
   });
 };
 
-function QuickAmountButtons({ form }: { form: FormInstance<MoneyFormValues> }) {
+function QuickAmountButtons({
+  form,
+  disabled = false,
+}: {
+  form: FormInstance<MoneyFormValues>;
+  disabled?: boolean;
+}) {
   const addAmount = (amount: number) => {
     const currentAmount = Number(form.getFieldValue('amount') ?? 0);
     form.setFieldValue('amount', roundMoney(currentAmount + amount));
@@ -208,7 +230,12 @@ function QuickAmountButtons({ form }: { form: FormInstance<MoneyFormValues> }) {
       style={{ marginTop: -12, marginBottom: 16 }}
     >
       {QUICK_AMOUNTS.map((amount) => (
-        <Button key={amount} size="small" onClick={() => addAmount(amount)}>
+        <Button
+          key={amount}
+          size="small"
+          disabled={disabled}
+          onClick={() => addAmount(amount)}
+        >
           +{amount}
         </Button>
       ))}
@@ -428,6 +455,28 @@ export function GameRoom() {
   const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
   const seenTransactionIdsRef = useRef<Set<string>>(new Set());
   const didInitializeNotificationsRef = useRef(false);
+  const bankPaymentReason = Form.useWatch('reason', bankPaymentForm);
+  const adminReason = Form.useWatch('reason', adminForm);
+  const isBankPaymentAmountLocked = Boolean(
+    bankPaymentReason && PRESET_REASON_AMOUNTS[bankPaymentReason],
+  );
+  const isAdminAmountLocked = Boolean(
+    adminReason && PRESET_REASON_AMOUNTS[adminReason],
+  );
+
+  useEffect(() => {
+    const amount = bankPaymentReason
+      ? PRESET_REASON_AMOUNTS[bankPaymentReason]
+      : undefined;
+
+    bankPaymentForm.setFieldValue('amount', amount);
+  }, [bankPaymentForm, bankPaymentReason]);
+
+  useEffect(() => {
+    const amount = adminReason ? PRESET_REASON_AMOUNTS[adminReason] : undefined;
+
+    adminForm.setFieldValue('amount', amount);
+  }, [adminForm, adminReason]);
 
   useEffect(() => {
     if (!code || !playerId) {
@@ -743,6 +792,67 @@ export function GameRoom() {
       message.error(error.message);
     }
   };
+
+  const handleSetPlayerJailStatus = (
+    targetPlayer: FirebaseRecord<Player>,
+    isJailed: boolean,
+  ) => {
+    if (!currentPlayer) {
+      return;
+    }
+
+    modal.confirm({
+      title: isJailed ? 'Deseja prender?' : 'Deseja soltar?',
+      content: `${isJailed ? 'Prender' : 'Soltar'} ${targetPlayer.name}?`,
+      okText: isJailed ? 'Prender' : 'Soltar',
+      cancelText: 'Cancelar',
+      okButtonProps: { danger: isJailed },
+      onOk: () =>
+        executeAction(
+          () =>
+            setPlayerJailStatus({
+              roomId: currentPlayer.room_id,
+              targetPlayerId: targetPlayer.id,
+              executedByPlayerId: currentPlayer.id,
+              isJailed,
+            }),
+          isJailed ? 'Jogador preso.' : 'Jogador solto.',
+        ),
+    });
+  };
+
+  const handleReleaseBail = (targetPlayer: FirebaseRecord<Player>) => {
+    if (!currentPlayer) {
+      return;
+    }
+
+    modal.confirm({
+      title: 'Liberar fiança?',
+      content: `Liberar pagamento de fiança para ${targetPlayer.name}?`,
+      okText: 'Liberar',
+      cancelText: 'Cancelar',
+      onOk: () =>
+        executeAction(
+          () =>
+            releasePlayerBail({
+              roomId: currentPlayer.room_id,
+              targetPlayerId: targetPlayer.id,
+              executedByPlayerId: currentPlayer.id,
+            }),
+          'Fiança liberada.',
+        ),
+    });
+  };
+
+  const handlePayJailBail = () =>
+    executeAction(
+      () =>
+        payJailBail({
+          roomId: currentPlayer?.room_id ?? '',
+          playerId,
+        }),
+      'Fiança paga. Você está livre.',
+    );
 
   const handleCreateBankLoan = () => {
     if (currentPlayerDebtTotal > 0) {
@@ -1073,6 +1183,43 @@ export function GameRoom() {
       ),
     },
   ];
+  const jailColumns: ColumnsType<FirebaseRecord<Player>> = [
+    {
+      title: 'Jogador',
+      key: 'player',
+      render: (_, player) => (
+        <Space>
+          <Typography.Text>{player.name}</Typography.Text>
+          {player.is_jailed ? <Tag color="red">Preso</Tag> : null}
+        </Space>
+      ),
+    },
+    {
+      title: 'Ações',
+      key: 'actions',
+      align: 'right',
+      render: (_, player) => (
+        <Space>
+          <Button
+            aria-label={player.is_jailed ? 'Soltar jogador' : 'Prender jogador'}
+            icon={player.is_jailed ? <LuLock /> : <LuLockOpen />}
+            danger={player.is_jailed}
+            type={player.is_jailed ? 'primary' : 'default'}
+            style={player.is_jailed ? undefined : { color: '#389e0d' }}
+            onClick={() => handleSetPlayerJailStatus(player, !player.is_jailed)}
+          />
+          {player.is_jailed && !player.is_bail_available ? (
+            <Button
+              aria-label="Liberar fiança"
+              icon={<LuCircleDollarSign />}
+              danger
+              onClick={() => handleReleaseBail(player)}
+            />
+          ) : null}
+        </Space>
+      ),
+    },
+  ];
 
   const personalTransactions = (state?.transactions ?? []).filter(
     (transaction) =>
@@ -1398,21 +1545,6 @@ export function GameRoom() {
                         onFinish={handlePayBank}
                       >
                         <Form.Item
-                          name="amount"
-                          label="Valor"
-                          rules={[
-                            { required: true, message: 'Informe o valor.' },
-                          ]}
-                        >
-                          <InputNumber
-                            min={0.01}
-                            precision={2}
-                            style={{ width: '100%' }}
-                            prefix="R$"
-                          />
-                        </Form.Item>
-                        <QuickAmountButtons form={bankPaymentForm} />
-                        <Form.Item
                           name="reason"
                           label="Motivo"
                           rules={[
@@ -1420,10 +1552,30 @@ export function GameRoom() {
                           ]}
                         >
                           <Select
+                            allowClear
                             options={BANK_PAYMENT_REASON_OPTIONS}
                             placeholder="Selecione o motivo"
                           />
                         </Form.Item>
+                        <Form.Item
+                          name="amount"
+                          label="Valor"
+                          rules={[
+                            { required: true, message: 'Informe o valor.' },
+                          ]}
+                        >
+                          <InputNumber
+                            disabled={isBankPaymentAmountLocked}
+                            min={0.01}
+                            precision={2}
+                            style={{ width: '100%' }}
+                            prefix="R$"
+                          />
+                        </Form.Item>
+                        <QuickAmountButtons
+                          form={bankPaymentForm}
+                          disabled={isBankPaymentAmountLocked}
+                        />
                         <Flex gap={8} justify="end">
                           <Button
                             type="primary"
@@ -1711,24 +1863,6 @@ export function GameRoom() {
                                 />
                               </Form.Item>
                               <Form.Item
-                                name="amount"
-                                label="Valor"
-                                rules={[
-                                  {
-                                    required: true,
-                                    message: 'Informe o valor.',
-                                  },
-                                ]}
-                              >
-                                <InputNumber
-                                  min={0.01}
-                                  precision={2}
-                                  style={{ width: '100%' }}
-                                  prefix="R$"
-                                />
-                              </Form.Item>
-                              <QuickAmountButtons form={adminForm} />
-                              <Form.Item
                                 name="reason"
                                 label="Motivo"
                                 rules={[
@@ -1739,10 +1873,33 @@ export function GameRoom() {
                                 ]}
                               >
                                 <Select
+                                  allowClear
                                   options={BANK_ACTION_REASON_OPTIONS}
                                   placeholder="Selecione o motivo"
                                 />
                               </Form.Item>
+                              <Form.Item
+                                name="amount"
+                                label="Valor"
+                                rules={[
+                                  {
+                                    required: true,
+                                    message: 'Informe o valor.',
+                                  },
+                                ]}
+                              >
+                                <InputNumber
+                                  disabled={isAdminAmountLocked}
+                                  min={0.01}
+                                  precision={2}
+                                  style={{ width: '100%' }}
+                                  prefix="R$"
+                                />
+                              </Form.Item>
+                              <QuickAmountButtons
+                                form={adminForm}
+                                disabled={isAdminAmountLocked}
+                              />
                               <Flex gap={8} justify="end">
                                 <Button
                                   type="primary"
@@ -1773,6 +1930,17 @@ export function GameRoom() {
                               rowKey="id"
                               columns={bankerDebtColumns}
                               dataSource={state?.debts ?? []}
+                              pagination={false}
+                            />
+                          </Card>
+                        </Col>
+
+                        <Col xs={24} lg={10}>
+                          <Card title="Prisão">
+                            <Table
+                              rowKey="id"
+                              columns={jailColumns}
+                              dataSource={state?.players ?? []}
                               pagination={false}
                             />
                           </Card>
@@ -1825,6 +1993,43 @@ export function GameRoom() {
           ]}
         />
       </Flex>
+
+      {currentPlayer?.is_jailed ? (
+        <Flex
+          vertical
+          align="center"
+          justify="center"
+          gap={16}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 900,
+            padding: 24,
+            background: 'rgba(0, 0, 0, 0.55)',
+            backdropFilter: 'blur(6px)',
+            textAlign: 'center',
+          }}
+        >
+          <LuGrid2X2 size={72} color="#fff" aria-hidden />
+          <Typography.Title level={2} style={{ color: '#fff', margin: 0 }}>
+            Você está preso
+          </Typography.Title>
+          <Typography.Text style={{ color: 'rgba(255, 255, 255, 0.82)' }}>
+            Aguarde o banqueiro liberar sua fiança ou soltar você.
+          </Typography.Text>
+          {currentPlayer.is_bail_available ? (
+            <Button
+              size="large"
+              type="primary"
+              icon={<LuCircleDollarSign />}
+              loading={isSubmitting}
+              onClick={handlePayJailBail}
+            >
+              Pagar fiança de {formatCurrency(JAIL_BAIL_AMOUNT)}
+            </Button>
+          ) : null}
+        </Flex>
+      ) : null}
 
       <Modal
         open={Boolean(activePendingRequest)}

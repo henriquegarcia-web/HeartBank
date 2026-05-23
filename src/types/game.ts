@@ -59,6 +59,8 @@ export type Player = {
   normalized_name: string;
   balance: number;
   is_banker: boolean;
+  is_jailed: boolean;
+  is_bail_available: boolean;
   created_at: string;
 };
 

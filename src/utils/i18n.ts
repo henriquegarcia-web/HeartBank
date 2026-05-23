@@ -9,7 +9,7 @@ export const resources = {
         loading: 'Carregando',
       },
       navigation: {
-        home: 'InÃ­cio',
+        home: 'Início',
       },
       brand: {
         name: 'Banco Coração',
@@ -35,8 +35,8 @@ export const resources = {
         },
       },
       validation: {
-        required: 'Campo obrigatÃ³rio',
-        invalidEmail: 'Informe um e-mail vÃ¡lido',
+        required: 'Campo obrigatório',
+        invalidEmail: 'Informe um e-mail válido',
         invalidFullName: 'Informe nome e sobrenome',
         minPassword: 'A senha deve ter pelo menos 6 caracteres',
       },
@@ -44,15 +44,15 @@ export const resources = {
         home: {
           title: 'Boilerplate React pronto para evoluir',
           subtitle:
-            'Base com Ant Design, formulÃ¡rios tipados, internacionalização, Firebase e testes.',
+            'Base com Ant Design, formulários tipados, internacionalização, Firebase e testes.',
           cardTitle: 'Cadastro inicial',
           cardDescription:
-            'Exemplo funcional usando React Hook Form, Zod e componentes de formulÃ¡rio.',
+            'Exemplo funcional usando React Hook Form, Zod e componentes de formulário.',
         },
         notFound: {
-          title: 'PÃ¡gina nÃ£o encontrada',
-          subtitle: 'A rota acessada nÃ£o existe.',
-          action: 'Voltar para o inÃ­cio',
+          title: 'Página não encontrada',
+          subtitle: 'A rota acessada não existe.',
+          action: 'Voltar para o início',
         },
       },
     },

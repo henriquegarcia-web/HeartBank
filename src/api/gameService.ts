@@ -22,6 +22,7 @@ import type {
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
+export const JAIL_BAIL_AMOUNT = 2000;
 
 type RoomSnapshot = {
   room: FirebaseRecord<Room>;
@@ -61,6 +62,12 @@ const generateRoomCode = () =>
   Array.from({ length: 6 }, () =>
     'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32)),
   ).join('');
+
+const withPlayerDefaults = <T extends FirebaseRecord<Player>>(player: T): T => ({
+  ...player,
+  is_jailed: player.is_jailed ?? false,
+  is_bail_available: player.is_bail_available ?? false,
+});
 
 export const getRoomByCode = async (code: string) => {
   const normalizedCode = code.trim().toUpperCase();
@@ -223,10 +230,12 @@ export const enterPlayerProfile = async ({
       return {
         ...existingPlayer,
         is_banker: true,
+        is_jailed: existingPlayer.is_jailed ?? false,
+        is_bail_available: existingPlayer.is_bail_available ?? false,
       };
     }
 
-    return existingPlayer;
+    return withPlayerDefaults(existingPlayer);
   }
 
   const playerRef = push(ref(realtimeDatabase, 'players'));
@@ -241,6 +250,8 @@ export const enterPlayerProfile = async ({
     normalized_name: normalizedName,
     balance: INITIAL_BALANCE,
     is_banker: shouldAssignBanker,
+    is_jailed: false,
+    is_bail_available: false,
     created_at: now(),
   };
 
@@ -276,6 +287,8 @@ const getPlayer = async (playerId: string) => {
   return {
     id: playerId,
     ...(snapshot.val() as Player),
+    is_jailed: (snapshot.val() as Player).is_jailed ?? false,
+    is_bail_available: (snapshot.val() as Player).is_bail_available ?? false,
   };
 };
 
@@ -760,6 +773,98 @@ export const moveMoney = async ({
 
   playerBalances.forEach((balance, id) => {
     updates[`players/${id}/balance`] = roundMoney(balance);
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const setPlayerJailStatus = async ({
+  roomId,
+  targetPlayerId,
+  executedByPlayerId,
+  isJailed,
+}: {
+  roomId: string;
+  targetPlayerId: string;
+  executedByPlayerId: string;
+  isJailed: boolean;
+}) => {
+  const [executedByPlayer, targetPlayer] = await Promise.all([
+    getPlayer(executedByPlayerId),
+    getPlayer(targetPlayerId),
+  ]);
+
+  assertBanker(executedByPlayer);
+  assertPlayerInRoom(executedByPlayer, roomId);
+  assertPlayerInRoom(targetPlayer, roomId);
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${targetPlayerId}/is_jailed`]: isJailed,
+    [`players/${targetPlayerId}/is_bail_available`]: false,
+  });
+};
+
+export const releasePlayerBail = async ({
+  roomId,
+  targetPlayerId,
+  executedByPlayerId,
+}: {
+  roomId: string;
+  targetPlayerId: string;
+  executedByPlayerId: string;
+}) => {
+  const [executedByPlayer, targetPlayer] = await Promise.all([
+    getPlayer(executedByPlayerId),
+    getPlayer(targetPlayerId),
+  ]);
+
+  assertBanker(executedByPlayer);
+  assertPlayerInRoom(executedByPlayer, roomId);
+  assertPlayerInRoom(targetPlayer, roomId);
+
+  if (!targetPlayer.is_jailed) {
+    throw new GameError('Jogador não está preso.');
+  }
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${targetPlayerId}/is_bail_available`]: true,
+  });
+};
+
+export const payJailBail = async ({
+  roomId,
+  playerId,
+}: {
+  roomId: string;
+  playerId: string;
+}) => {
+  const player = await getPlayer(playerId);
+
+  assertPlayerInRoom(player, roomId);
+
+  if (!player.is_jailed) {
+    throw new GameError('Você não está preso.');
+  }
+
+  if (!player.is_bail_available) {
+    throw new GameError('A fiança ainda não foi liberada.');
+  }
+
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${playerId}/is_jailed`]: false,
+    [`players/${playerId}/is_bail_available`]: false,
+  };
+
+  addFlexiblePlayerToBankPayment({
+    updates,
+    roomId,
+    player,
+    amount: JAIL_BAIL_AMOUNT,
+    executedByPlayerId: playerId,
+    reason: 'Fiança',
   });
 
   await update(ref(realtimeDatabase), updates);
@@ -1432,7 +1537,7 @@ export const subscribeRoomSnapshot = (
 
     const players = Object.entries(value.players ?? {})
       .filter(([, player]) => player.room_id === roomId)
-      .map(([id, player]) => ({ id, ...player }))
+      .map(([id, player]) => withPlayerDefaults({ id, ...player }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const transactions = Object.entries(value.transactions ?? {})
