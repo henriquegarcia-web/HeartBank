@@ -4,7 +4,6 @@
   StockTitleDefinition,
   TitleDefinition,
 } from '@/types/game';
-//
 
 export const AVAILABLE_TITLES = {
   lands: [
@@ -32,7 +31,7 @@ export const AVAILABLE_TITLES = {
       kind: 'LAND',
       name: 'Av. Brasil',
       color: '#24910f',
-      purchase_price: 1000,
+      purchase_price: 750,
       receivables: {
         rent: 40,
         one_house: 200,
@@ -51,7 +50,7 @@ export const AVAILABLE_TITLES = {
       kind: 'LAND',
       name: 'Av. Beira Mar',
       color: '#0f8f2f',
-      purchase_price: 1000,
+      purchase_price: 600,
       receivables: {
         rent: 20,
         one_house: 100,
@@ -165,7 +164,7 @@ export const AVAILABLE_TITLES = {
       kind: 'LAND',
       name: 'R. da Consolação',
       color: '#1f9bd1',
-      purchase_price: 2000,
+      purchase_price: 1800,
       receivables: {
         rent: 140,
         one_house: 700,
@@ -203,7 +202,7 @@ export const AVAILABLE_TITLES = {
       kind: 'LAND',
       name: 'Av. Santo Amaro',
       color: '#1f9bd1',
-      purchase_price: 2000,
+      purchase_price: 1800,
       receivables: {
         rent: 140,
         one_house: 700,
@@ -222,7 +221,7 @@ export const AVAILABLE_TITLES = {
       kind: 'LAND',
       name: 'Av. do Contorno',
       color: '#8f2115',
-      purchase_price: 2000,
+      purchase_price: 2200,
       receivables: {
         rent: 180,
         one_house: 900,
@@ -435,7 +434,7 @@ export const AVAILABLE_TITLES = {
       name: 'Petroleira',
       color: '#30343b',
       image_url: '/acao_petroleira.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
     {
@@ -444,7 +443,7 @@ export const AVAILABLE_TITLES = {
       name: 'Companhia Aérea',
       color: '#30343b',
       image_url: '/acao_aero.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
     {
@@ -453,7 +452,7 @@ export const AVAILABLE_TITLES = {
       name: 'Estrela Card',
       color: '#30343b',
       image_url: '/acao_estrela.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
     {
@@ -462,7 +461,7 @@ export const AVAILABLE_TITLES = {
       name: 'Emissora de TV',
       color: '#30343b',
       image_url: '/acao_startv.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
     {
@@ -471,7 +470,7 @@ export const AVAILABLE_TITLES = {
       name: 'Banco',
       color: '#30343b',
       image_url: '/acao_banco.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
     {
@@ -480,7 +479,7 @@ export const AVAILABLE_TITLES = {
       name: 'Ecommerce',
       color: '#30343b',
       image_url: '/acao_ecommerce.png',
-      purchase_price: 1000,
+      purchase_price: 2000,
       multiplier: 500,
     },
   ] satisfies StockTitleDefinition[],

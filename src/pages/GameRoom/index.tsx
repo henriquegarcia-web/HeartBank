@@ -1393,7 +1393,7 @@ export function GameRoom() {
                 src={definition.image_url}
                 style={{
                   width: '100%',
-                  height: 120,
+                  height: 160,
                   objectFit: 'cover',
                   borderRadius: 8,
                 }}
@@ -1406,9 +1406,10 @@ export function GameRoom() {
                   {formatCurrency(definition.multiplier)} por dado
                 </Descriptions.Item>
               </Descriptions>
-              <Flex gap={8} wrap="wrap">
+              <Flex gap={8} wrap="wrap" justify="end">
                 <Button
                   icon={<LuDices />}
+                  type="primary"
                   onClick={() => {
                     chargeForm.resetFields();
                     setSelectedDiceCount(undefined);
@@ -1417,6 +1418,7 @@ export function GameRoom() {
                       purchasedTitle: title,
                     });
                   }}
+                  style={{ flex: 1 }}
                 >
                   Cobrar ação
                 </Button>
@@ -1428,6 +1430,7 @@ export function GameRoom() {
                       purchasedTitle: title,
                     });
                   }}
+                  style={{ flex: 1 }}
                 >
                   Vender
                 </Button>
@@ -1487,7 +1490,7 @@ export function GameRoom() {
                 {formatCurrency(definition.receivables.hotel)}
               </Descriptions.Item>
             </Descriptions>
-            <Flex gap={8} wrap="wrap">
+            <Flex gap={8} wrap="wrap" justify="end">
               <Button
                 icon={<LuHouse />}
                 disabled={
@@ -1499,6 +1502,7 @@ export function GameRoom() {
                 }
                 loading={isSubmitting}
                 onClick={() => void handleUpgradeTitle(title.id, 'HOUSE')}
+                style={{ flex: 1 }}
               >
                 Comprar
               </Button>
@@ -1513,6 +1517,7 @@ export function GameRoom() {
                 }
                 loading={isSubmitting}
                 onClick={() => void handleUpgradeTitle(title.id, 'HOTEL')}
+                style={{ flex: 1 }}
               >
                 Comprar
               </Button>
@@ -1522,6 +1527,8 @@ export function GameRoom() {
                   setSelectedDiceCount(undefined);
                   setTitleActionModal({ kind: 'RENT', purchasedTitle: title });
                 }}
+                style={{ flex: 1 }}
+                type="primary"
               >
                 Cobrar aluguel
               </Button>
@@ -1530,6 +1537,7 @@ export function GameRoom() {
                   saleForm.resetFields();
                   setTitleActionModal({ kind: 'SALE', purchasedTitle: title });
                 }}
+                style={{ flex: 1 }}
               >
                 Vender
               </Button>
@@ -1543,46 +1551,6 @@ export function GameRoom() {
   return (
     <AppLayout>
       <Flex vertical gap={24} style={{ paddingBottom: 104 }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={16}>
-            <Card loading={isLoading}>
-              <Flex justify="space-between" gap={16} wrap="wrap">
-                <Flex vertical gap={4}>
-                  <Typography.Title level={4} style={{ margin: 0 }}>
-                    {currentPlayer?.name}
-                  </Typography.Title>
-                  {currentPlayer?.is_banker ? (
-                    <Tag color="gold" style={{ width: 'fit-content' }}>
-                      Banqueiro
-                    </Tag>
-                  ) : null}
-                </Flex>
-                <Flex vertical align="flex-end" gap={4}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Saldo atual
-                  </Typography.Text>
-                  <Typography.Title level={4} style={{ margin: 0 }}>
-                    {formatCurrency(currentPlayer?.balance ?? 0)}
-                  </Typography.Title>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Patrimônio: {formatCurrency(currentPlayerAssetValue)}
-                  </Typography.Text>
-                  {currentPlayerDebtTotal > 0 ? (
-                    <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                      Dívidas: {formatCurrency(currentPlayerDebtTotal)}
-                    </Typography.Text>
-                  ) : null}
-                  {currentPlayerReceivableTotal > 0 ? (
-                    <Typography.Text type="success" style={{ fontSize: 12 }}>
-                      A receber: {formatCurrency(currentPlayerReceivableTotal)}
-                    </Typography.Text>
-                  ) : null}
-                </Flex>
-              </Flex>
-            </Card>
-          </Col>
-        </Row>
-
         <Tabs
           activeKey={activeTabKey}
           renderTabBar={() => <></>}
@@ -1592,6 +1560,58 @@ export function GameRoom() {
               label: 'Principal',
               children: (
                 <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={16}>
+                    <Card loading={isLoading}>
+                      <Flex justify="space-between" gap={16} wrap="wrap">
+                        <Flex vertical gap={4}>
+                          <Typography.Title level={4} style={{ margin: 0 }}>
+                            {currentPlayer?.name}
+                          </Typography.Title>
+                          {currentPlayer?.is_banker ? (
+                            <Tag color="gold" style={{ width: 'fit-content' }}>
+                              Banqueiro
+                            </Tag>
+                          ) : null}
+                        </Flex>
+                        <Flex vertical align="flex-end" gap={4}>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 12 }}
+                          >
+                            Saldo atual
+                          </Typography.Text>
+                          <Typography.Title level={4} style={{ margin: 0 }}>
+                            {formatCurrency(currentPlayer?.balance ?? 0)}
+                          </Typography.Title>
+                          <Typography.Text
+                            type="secondary"
+                            style={{ fontSize: 12 }}
+                          >
+                            Patrimônio:{' '}
+                            {formatCurrency(currentPlayerAssetValue)}
+                          </Typography.Text>
+                          {currentPlayerDebtTotal > 0 ? (
+                            <Typography.Text
+                              type="danger"
+                              style={{ fontSize: 12 }}
+                            >
+                              Dívidas: {formatCurrency(currentPlayerDebtTotal)}
+                            </Typography.Text>
+                          ) : null}
+                          {currentPlayerReceivableTotal > 0 ? (
+                            <Typography.Text
+                              type="success"
+                              style={{ fontSize: 12 }}
+                            >
+                              A receber:{' '}
+                              {formatCurrency(currentPlayerReceivableTotal)}
+                            </Typography.Text>
+                          ) : null}
+                        </Flex>
+                      </Flex>
+                    </Card>
+                  </Col>
+
                   <Col xs={24} lg={12}>
                     <Card title="Pagar Banco">
                       <Form
@@ -1637,6 +1657,7 @@ export function GameRoom() {
                             type="primary"
                             htmlType="submit"
                             loading={isSubmitting}
+                            style={{ flex: 1 }}
                           >
                             Confirmar pagamento
                           </Button>
@@ -1754,11 +1775,12 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
-                        <Flex justify="end">
+                        <Flex>
                           <Button
                             type="primary"
                             htmlType="submit"
                             loading={isSubmitting}
+                            style={{ flex: 1 }}
                           >
                             Pedir empréstimo
                           </Button>
@@ -1836,6 +1858,7 @@ export function GameRoom() {
                               htmlType="submit"
                               disabled={currentPlayerDebtTotal > 0}
                               loading={isSubmitting}
+                              style={{ flex: 1 }}
                             >
                               Comprar título
                             </Button>
@@ -1963,6 +1986,7 @@ export function GameRoom() {
                                   onClick={() =>
                                     void handleBankAction('BANK_TO_PLAYER')
                                   }
+                                  style={{ flex: 1 }}
                                 >
                                   Adicionar
                                 </Button>
@@ -1972,6 +1996,7 @@ export function GameRoom() {
                                   onClick={() =>
                                     void handleBankAction('BANK_CHARGE_PLAYER')
                                   }
+                                  style={{ flex: 1 }}
                                 >
                                   Retirar
                                 </Button>

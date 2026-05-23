@@ -18,7 +18,11 @@ export function AppHeader() {
         justifyContent: 'center',
         paddingInline: 24,
         height: 50,
-        position: 'relative',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 1001,
       }}
     >
       {canGoHome ? (
