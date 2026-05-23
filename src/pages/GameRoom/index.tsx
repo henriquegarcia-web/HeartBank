@@ -240,7 +240,7 @@ function TransactionHistoryList({
   return (
     <Flex
       vertical
-      gap={8}
+      gap={10}
       style={{
         maxHeight: 280,
         overflowY: 'auto',
@@ -251,26 +251,53 @@ function TransactionHistoryList({
         const signal = getTransactionSignal(transaction, perspectivePlayerId);
 
         return (
-          <Typography.Text
+          <Flex
             key={transaction.id}
+            vertical
+            align="end"
             style={{
-              display: 'block',
-              fontSize: 12,
-              lineHeight: 1.35,
-              whiteSpace: 'normal',
+              paddingBottom: 6,
+              borderBottom: '1px solid rgba(0, 0, 0, 0.08)',
+              paddingRight: 10,
             }}
           >
-            <Typography.Text
-              strong
-              type={signal === '+' ? 'success' : 'danger'}
-              style={{ fontSize: 12 }}
+            <Flex
+              justify="space-between"
+              align="center"
+              style={{ width: '100%' }}
             >
-              {signal} {formatCurrency(transaction.amount)}
-            </Typography.Text>{' '}
-            | {getPlayerName(players, transaction.from_player_id)} {'→'}{' '}
-            {getPlayerName(players, transaction.to_player_id)} |{' '}
-            {transaction.reason || 'Sem motivo'}
-          </Typography.Text>
+              <Tag
+                color={signal === '+' ? 'green' : 'red'}
+                style={{ fontSize: 10 }}
+              >
+                {signal} {formatCurrency(transaction.amount)}
+              </Tag>
+              <Typography.Text
+                style={{
+                  display: 'block',
+                  fontSize: 10,
+                  lineHeight: 1.35,
+                  fontWeight: 'bold',
+                  whiteSpace: 'normal',
+                }}
+              >
+                {getPlayerName(players, transaction.from_player_id)} {'→'}{' '}
+                {getPlayerName(players, transaction.to_player_id)}
+              </Typography.Text>
+            </Flex>
+
+            <Typography.Text
+              key={transaction.id}
+              style={{
+                display: 'block',
+                fontSize: 10,
+                lineHeight: 1.35,
+                whiteSpace: 'normal',
+              }}
+            >
+              {transaction.reason || 'Sem motivo'}
+            </Typography.Text>
+          </Flex>
         );
       })}
     </Flex>
@@ -727,6 +754,11 @@ export function GameRoom() {
   };
 
   const handleCreateBankLoan = () => {
+    if (currentPlayerDebtTotal > 0) {
+      message.error('Quite suas dividas ativas antes de pedir emprestimo.');
+      return;
+    }
+
     modal.confirm({
       title: 'Confirmar emprestimo bancario?',
       content: `O banco vai liberar ${formatCurrency(
@@ -1454,15 +1486,23 @@ export function GameRoom() {
                     <Card title="Emprestimo do banco">
                       <Flex vertical gap={12}>
                         <Descriptions column={1} size="small" bordered>
-                          <Descriptions.Item label="Patrimonio">
+                          <Descriptions.Item label="Patrimonio + Saldo">
                             {formatCurrency(currentPlayerNetWorth)}
                           </Descriptions.Item>
                           <Descriptions.Item label="Valor disponivel">
                             {formatCurrency(bankLoanAmount)}
                           </Descriptions.Item>
                         </Descriptions>
+                        {currentPlayerDebtTotal > 0 ? (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            title="Quite suas dividas ativas antes de pedir emprestimo."
+                          />
+                        ) : null}
                         <Button
                           type="primary"
+                          disabled={currentPlayerDebtTotal > 0}
                           loading={isSubmitting}
                           onClick={() => void handleCreateBankLoan()}
                         >

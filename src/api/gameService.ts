@@ -841,7 +841,21 @@ export const createBankLoan = async ({
   const player = await getPlayer(playerId);
   assertPlayerInRoom(player, roomId);
 
-  const purchasedTitles = await listRecords<PurchasedTitle>('purchased_titles');
+  const [debts, purchasedTitles] = await Promise.all([
+    listRecords<Debt>('debts'),
+    listRecords<PurchasedTitle>('purchased_titles'),
+  ]);
+  const hasActiveDebt = debts.some(
+    (debt) =>
+      debt.room_id === roomId &&
+      debt.from_player_id === playerId &&
+      debt.remaining_amount > 0,
+  );
+
+  if (hasActiveDebt) {
+    throw new GameError('Quite suas dividas ativas antes de pedir emprestimo.');
+  }
+
   const assetValue = purchasedTitles
     .filter(
       (title) => title.room_id === roomId && title.owner_player_id === playerId,
