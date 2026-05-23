@@ -4,6 +4,47 @@ export type TransactionType =
   | 'BANK_TO_PLAYER'
   | 'BANK_CHARGE_PLAYER';
 
+export type TitleKind = 'LAND' | 'STOCK';
+
+export type PendingRequestKind =
+  | 'PLAYER_LOAN'
+  | 'RENT_CHARGE'
+  | 'STOCK_CHARGE'
+  | 'TITLE_SALE'
+  | 'TITLE_PURCHASE';
+
+export type LandTitleDefinition = {
+  id: string;
+  kind: 'LAND';
+  name: string;
+  color: string;
+  purchase_price: number;
+  receivables: {
+    rent: number;
+    one_house: number;
+    two_houses: number;
+    three_houses: number;
+    four_houses: number;
+    hotel: number;
+  };
+  acquisition: {
+    house_price: number;
+    hotel_price: number;
+  };
+};
+
+export type StockTitleDefinition = {
+  id: string;
+  kind: 'STOCK';
+  name: string;
+  color: string;
+  image_url: string;
+  purchase_price: number;
+  multiplier: number;
+};
+
+export type TitleDefinition = LandTitleDefinition | StockTitleDefinition;
+
 export type Room = {
   name: string;
   code: string;
@@ -41,4 +82,30 @@ export type Debt = {
   reason: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type PurchasedTitle = {
+  room_id: string;
+  title_id: string;
+  owner_player_id: string;
+  kind: TitleKind;
+  purchase_price: number;
+  houses: number;
+  has_hotel: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PendingRequest = {
+  room_id: string;
+  kind: PendingRequestKind;
+  requester_player_id: string;
+  target_player_id: string;
+  amount: number;
+  title_id: string | null;
+  purchased_title_id: string | null;
+  requested_amount: number | null;
+  repayment_amount: number | null;
+  dice_count: number | null;
+  created_at: string;
 };

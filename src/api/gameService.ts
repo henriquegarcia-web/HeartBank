@@ -1,12 +1,21 @@
 import { get, onValue, push, ref, update } from 'firebase/database';
 
 import { listRecords } from '@/api/firebaseDatabase';
+import { getBankLoanAmountByNetWorth } from '@/constants/bankLoans';
+import {
+  calculatePurchasedTitleAssetValue,
+  getLandChargeAmount,
+  getTitleDefinition,
+} from '@/constants/gameTitles';
 import { realtimeDatabase } from '@/firebase/database';
 import type { FirebaseRecord } from '@/types/firebase';
 import type {
   Debt,
+  PendingRequest,
   Player,
+  PurchasedTitle,
   Room,
+  TitleKind,
   Transaction,
   TransactionType,
 } from '@/types/game';
@@ -19,6 +28,8 @@ type RoomSnapshot = {
   players: Array<FirebaseRecord<Player>>;
   transactions: Array<FirebaseRecord<Transaction>>;
   debts: Array<FirebaseRecord<Debt>>;
+  purchasedTitles: Array<FirebaseRecord<PurchasedTitle>>;
+  pendingRequests: Array<FirebaseRecord<PendingRequest>>;
 };
 
 type RoomListSnapshot = Array<
@@ -131,11 +142,14 @@ export const deleteRoom = async (
     throw new GameError('Apenas o criador da sala pode excluir a sala.');
   }
 
-  const [players, transactions, debts] = await Promise.all([
-    listRecords<Player>('players'),
-    listRecords<Transaction>('transactions'),
-    listRecords<Debt>('debts'),
-  ]);
+  const [players, transactions, debts, purchasedTitles, pendingRequests] =
+    await Promise.all([
+      listRecords<Player>('players'),
+      listRecords<Transaction>('transactions'),
+      listRecords<Debt>('debts'),
+      listRecords<PurchasedTitle>('purchased_titles'),
+      listRecords<PendingRequest>('pending_requests'),
+    ]);
   const updates: Record<string, null> = {
     [`rooms/${roomId}`]: null,
   };
@@ -156,6 +170,18 @@ export const deleteRoom = async (
     .filter((debt) => debt.room_id === roomId)
     .forEach((debt) => {
       updates[`debts/${debt.id}`] = null;
+    });
+
+  purchasedTitles
+    .filter((title) => title.room_id === roomId)
+    .forEach((title) => {
+      updates[`purchased_titles/${title.id}`] = null;
+    });
+
+  pendingRequests
+    .filter((request) => request.room_id === roomId)
+    .forEach((request) => {
+      updates[`pending_requests/${request.id}`] = null;
     });
 
   await update(ref(realtimeDatabase), updates);
@@ -263,6 +289,36 @@ const getPlayer = async (playerId: string) => {
   };
 };
 
+const getPurchasedTitle = async (purchasedTitleId: string) => {
+  const snapshot = await get(
+    ref(realtimeDatabase, `purchased_titles/${purchasedTitleId}`),
+  );
+
+  if (!snapshot.exists()) {
+    throw new GameError('Titulo nao encontrado.');
+  }
+
+  return {
+    id: purchasedTitleId,
+    ...(snapshot.val() as PurchasedTitle),
+  };
+};
+
+const getPendingRequest = async (requestId: string) => {
+  const snapshot = await get(
+    ref(realtimeDatabase, `pending_requests/${requestId}`),
+  );
+
+  if (!snapshot.exists()) {
+    throw new GameError('Solicitacao nao encontrada.');
+  }
+
+  return {
+    id: requestId,
+    ...(snapshot.val() as PendingRequest),
+  };
+};
+
 const createTransactionUpdate = (transaction: TransferTransaction) => {
   const transactionRef = push(ref(realtimeDatabase, 'transactions'));
 
@@ -298,6 +354,45 @@ const createDebtUpdate = (debt: Omit<Debt, 'created_at' | 'updated_at'>) => {
   };
 };
 
+const createPendingRequestUpdate = (
+  request: Omit<PendingRequest, 'created_at'>,
+) => {
+  const requestRef = push(ref(realtimeDatabase, 'pending_requests'));
+
+  if (!requestRef.key) {
+    throw new GameError('Nao foi possivel registrar a solicitacao.');
+  }
+
+  return {
+    key: requestRef.key,
+    value: {
+      ...request,
+      created_at: now(),
+    } satisfies PendingRequest,
+  };
+};
+
+const createPurchasedTitleUpdate = (
+  title: Omit<PurchasedTitle, 'created_at' | 'updated_at'>,
+) => {
+  const titleRef = push(ref(realtimeDatabase, 'purchased_titles'));
+
+  if (!titleRef.key) {
+    throw new GameError('Nao foi possivel registrar o titulo.');
+  }
+
+  const createdAt = now();
+
+  return {
+    key: titleRef.key,
+    value: {
+      ...title,
+      created_at: createdAt,
+      updated_at: createdAt,
+    } satisfies PurchasedTitle,
+  };
+};
+
 const assertCanDebit = (player: FirebaseRecord<Player>, amount: number) => {
   if (!ALLOW_NEGATIVE_BALANCE && player.balance < amount) {
     throw new GameError('Saldo insuficiente para esta operacao.');
@@ -307,6 +402,12 @@ const assertCanDebit = (player: FirebaseRecord<Player>, amount: number) => {
 const assertBanker = (player: FirebaseRecord<Player>) => {
   if (!player.is_banker) {
     throw new GameError('Apenas o banqueiro pode executar esta acao.');
+  }
+};
+
+const assertPlayerInRoom = (player: FirebaseRecord<Player>, roomId: string) => {
+  if (player.room_id !== roomId) {
+    throw new GameError('Jogador invalido para esta sala.');
   }
 };
 
@@ -326,6 +427,93 @@ const addTransactionToUpdates = (
   });
 
   updates[`transactions/${createdTransaction.key}`] = createdTransaction.value;
+};
+
+const addDebtToUpdates = (
+  updates: Record<string, unknown>,
+  debt: Omit<Debt, 'created_at' | 'updated_at'>,
+) => {
+  const createdDebt = createDebtUpdate({
+    ...debt,
+    original_amount: roundMoney(debt.original_amount),
+    remaining_amount: roundMoney(debt.remaining_amount),
+  });
+
+  updates[`debts/${createdDebt.key}`] = createdDebt.value;
+};
+
+const assertTitleAvailable = async (roomId: string, titleId: string) => {
+  const purchasedTitles = await listRecords<PurchasedTitle>('purchased_titles');
+  const isPurchased = purchasedTitles.some(
+    (title) => title.room_id === roomId && title.title_id === titleId,
+  );
+
+  if (isPurchased) {
+    throw new GameError('Este titulo ja foi comprado.');
+  }
+};
+
+const addDirectPlayerToBankPayment = ({
+  updates,
+  roomId,
+  player,
+  amount,
+  executedByPlayerId,
+  reason,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  player: FirebaseRecord<Player>;
+  amount: number;
+  executedByPlayerId: string;
+  reason: string;
+}) => {
+  assertCanDebit(player, amount);
+  updates[`players/${player.id}/balance`] = roundMoney(player.balance - amount);
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'PLAYER_TO_BANK',
+    amount,
+    from_player_id: player.id,
+    to_player_id: null,
+    executed_by_player_id: executedByPlayerId,
+    reason,
+  });
+};
+
+const addDirectPlayerToPlayerPayment = ({
+  updates,
+  roomId,
+  fromPlayer,
+  toPlayer,
+  amount,
+  executedByPlayerId,
+  reason,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  fromPlayer: FirebaseRecord<Player>;
+  toPlayer: FirebaseRecord<Player>;
+  amount: number;
+  executedByPlayerId: string;
+  reason: string;
+}) => {
+  assertCanDebit(fromPlayer, amount);
+  updates[`players/${fromPlayer.id}/balance`] = roundMoney(
+    fromPlayer.balance - amount,
+  );
+  updates[`players/${toPlayer.id}/balance`] = roundMoney(
+    toPlayer.balance + amount,
+  );
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'PLAYER_TO_PLAYER',
+    amount,
+    from_player_id: fromPlayer.id,
+    to_player_id: toPlayer.id,
+    executed_by_player_id: executedByPlayerId,
+    reason,
+  });
 };
 
 const settleDebtsWithIncomingMoney = (
@@ -558,6 +746,549 @@ export const moveMoney = async ({
   await update(ref(realtimeDatabase), updates);
 };
 
+export const createBankLoan = async ({
+  roomId,
+  playerId,
+}: {
+  roomId: string;
+  playerId: string;
+}) => {
+  const player = await getPlayer(playerId);
+  assertPlayerInRoom(player, roomId);
+
+  const [debts, purchasedTitles] = await Promise.all([
+    listRecords<Debt>('debts'),
+    listRecords<PurchasedTitle>('purchased_titles'),
+  ]);
+  const hasActiveDebt = debts.some(
+    (debt) =>
+      debt.room_id === roomId &&
+      debt.from_player_id === playerId &&
+      debt.remaining_amount > 0,
+  );
+
+  if (hasActiveDebt) {
+    throw new GameError('Quite suas dividas ativas antes de pedir ao banco.');
+  }
+
+  const assetValue = purchasedTitles
+    .filter(
+      (title) => title.room_id === roomId && title.owner_player_id === playerId,
+    )
+    .reduce(
+      (total, title) => total + calculatePurchasedTitleAssetValue(title),
+      0,
+    );
+  const loanAmount = getBankLoanAmountByNetWorth(player.balance + assetValue);
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${playerId}/balance`]: roundMoney(player.balance + loanAmount),
+  };
+
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'BANK_TO_PLAYER',
+    amount: loanAmount,
+    from_player_id: null,
+    to_player_id: playerId,
+    executed_by_player_id: playerId,
+    reason: 'Emprestimo bancario',
+  });
+  addDebtToUpdates(updates, {
+    room_id: roomId,
+    from_player_id: playerId,
+    to_player_id: null,
+    original_amount: loanAmount,
+    remaining_amount: loanAmount,
+    reason: 'Emprestimo bancario',
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const createPlayerLoanRequest = async ({
+  roomId,
+  borrowerPlayerId,
+  creditorPlayerId,
+  requestedAmount,
+  repaymentAmount,
+}: {
+  roomId: string;
+  borrowerPlayerId: string;
+  creditorPlayerId: string;
+  requestedAmount: number;
+  repaymentAmount: number;
+}) => {
+  assertPositiveAmount(requestedAmount);
+  assertPositiveAmount(repaymentAmount);
+
+  if (borrowerPlayerId === creditorPlayerId) {
+    throw new GameError('Escolha outro jogador como credor.');
+  }
+
+  if (repaymentAmount < requestedAmount) {
+    throw new GameError('O valor a pagar deve ser maior ou igual ao solicitado.');
+  }
+
+  const [borrower, creditor] = await Promise.all([
+    getPlayer(borrowerPlayerId),
+    getPlayer(creditorPlayerId),
+  ]);
+  assertPlayerInRoom(borrower, roomId);
+  assertPlayerInRoom(creditor, roomId);
+
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: 'PLAYER_LOAN',
+    requester_player_id: borrowerPlayerId,
+    target_player_id: creditorPlayerId,
+    amount: roundMoney(requestedAmount),
+    title_id: null,
+    purchased_title_id: null,
+    requested_amount: roundMoney(requestedAmount),
+    repayment_amount: roundMoney(repaymentAmount),
+    dice_count: null,
+  });
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`pending_requests/${createdRequest.key}`]: createdRequest.value,
+  });
+};
+export const requestTitlePurchase = async ({
+  roomId,
+  playerId,
+  titleId,
+}: {
+  roomId: string;
+  playerId: string;
+  titleId: string;
+}) => {
+  const definition = getTitleDefinition(titleId);
+
+  if (!definition) {
+    throw new GameError('Titulo invalido.');
+  }
+
+  const player = await getPlayer(playerId);
+  assertPlayerInRoom(player, roomId);
+  assertCanDebit(player, definition.purchase_price);
+  await assertTitleAvailable(roomId, titleId);
+
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: 'TITLE_PURCHASE',
+    requester_player_id: playerId,
+    target_player_id: playerId,
+    amount: definition.purchase_price,
+    title_id: titleId,
+    purchased_title_id: null,
+    requested_amount: null,
+    repayment_amount: null,
+    dice_count: null,
+  });
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`pending_requests/${createdRequest.key}`]: createdRequest.value,
+  });
+};
+
+export const upgradePurchasedTitle = async ({
+  roomId,
+  playerId,
+  purchasedTitleId,
+  upgrade,
+}: {
+  roomId: string;
+  playerId: string;
+  purchasedTitleId: string;
+  upgrade: 'HOUSE' | 'HOTEL';
+}) => {
+  const [player, purchasedTitle] = await Promise.all([
+    getPlayer(playerId),
+    getPurchasedTitle(purchasedTitleId),
+  ]);
+  const definition = getTitleDefinition(purchasedTitle.title_id);
+
+  assertPlayerInRoom(player, roomId);
+
+  if (
+    purchasedTitle.room_id !== roomId ||
+    purchasedTitle.owner_player_id !== playerId
+  ) {
+    throw new GameError('Voce nao possui este titulo.');
+  }
+
+  if (!definition || definition.kind !== 'LAND') {
+    throw new GameError('Apenas terrenos podem receber casas ou hotel.');
+  }
+
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`purchased_titles/${purchasedTitleId}/updated_at`]: now(),
+  };
+
+  if (upgrade === 'HOUSE') {
+    if (purchasedTitle.has_hotel || purchasedTitle.houses >= 4) {
+      throw new GameError('Este terreno nao pode receber mais casas.');
+    }
+
+    addDirectPlayerToBankPayment({
+      updates,
+      roomId,
+      player,
+      amount: definition.acquisition.house_price,
+      executedByPlayerId: playerId,
+      reason: `Compra de casa - ${definition.name}`,
+    });
+    updates[`purchased_titles/${purchasedTitleId}/houses`] =
+      purchasedTitle.houses + 1;
+  } else {
+    if (purchasedTitle.has_hotel || purchasedTitle.houses !== 4) {
+      throw new GameError('O hotel so pode ser comprado depois de 4 casas.');
+    }
+
+    addDirectPlayerToBankPayment({
+      updates,
+      roomId,
+      player,
+      amount: definition.acquisition.hotel_price,
+      executedByPlayerId: playerId,
+      reason: `Compra de hotel - ${definition.name}`,
+    });
+    updates[`purchased_titles/${purchasedTitleId}/has_hotel`] = true;
+  }
+
+  await update(ref(realtimeDatabase), updates);
+};
+export const createRentChargeRequest = async ({
+  roomId,
+  ownerPlayerId,
+  payerPlayerId,
+  purchasedTitleId,
+}: {
+  roomId: string;
+  ownerPlayerId: string;
+  payerPlayerId: string;
+  purchasedTitleId: string;
+}) => {
+  if (ownerPlayerId === payerPlayerId) {
+    throw new GameError('Escolha outro jogador para cobrar.');
+  }
+
+  const [owner, payer, purchasedTitle] = await Promise.all([
+    getPlayer(ownerPlayerId),
+    getPlayer(payerPlayerId),
+    getPurchasedTitle(purchasedTitleId),
+  ]);
+  const amount = getLandChargeAmount(purchasedTitle);
+
+  assertPlayerInRoom(owner, roomId);
+  assertPlayerInRoom(payer, roomId);
+
+  if (
+    purchasedTitle.room_id !== roomId ||
+    purchasedTitle.owner_player_id !== ownerPlayerId
+  ) {
+    throw new GameError('Voce nao possui este terreno.');
+  }
+
+  assertPositiveAmount(amount);
+
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: 'RENT_CHARGE',
+    requester_player_id: ownerPlayerId,
+    target_player_id: payerPlayerId,
+    amount,
+    title_id: purchasedTitle.title_id,
+    purchased_title_id: purchasedTitleId,
+    requested_amount: null,
+    repayment_amount: null,
+    dice_count: null,
+  });
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`pending_requests/${createdRequest.key}`]: createdRequest.value,
+  });
+};
+
+export const createStockChargeRequest = async ({
+  roomId,
+  ownerPlayerId,
+  payerPlayerId,
+  purchasedTitleId,
+  diceCount,
+}: {
+  roomId: string;
+  ownerPlayerId: string;
+  payerPlayerId: string;
+  purchasedTitleId: string;
+  diceCount: number;
+}) => {
+  if (ownerPlayerId === payerPlayerId) {
+    throw new GameError('Escolha outro jogador para cobrar.');
+  }
+
+  if (!Number.isInteger(diceCount) || diceCount < 1 || diceCount > 12) {
+    throw new GameError('Informe um valor de dados entre 1 e 12.');
+  }
+
+  const [owner, payer, purchasedTitle] = await Promise.all([
+    getPlayer(ownerPlayerId),
+    getPlayer(payerPlayerId),
+    getPurchasedTitle(purchasedTitleId),
+  ]);
+  const definition = getTitleDefinition(purchasedTitle.title_id);
+
+  assertPlayerInRoom(owner, roomId);
+  assertPlayerInRoom(payer, roomId);
+
+  if (
+    purchasedTitle.room_id !== roomId ||
+    purchasedTitle.owner_player_id !== ownerPlayerId
+  ) {
+    throw new GameError('Voce nao possui esta acao.');
+  }
+
+  if (!definition || definition.kind !== 'STOCK') {
+    throw new GameError('Titulo de acao invalido.');
+  }
+
+  const amount = diceCount * definition.multiplier;
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: 'STOCK_CHARGE',
+    requester_player_id: ownerPlayerId,
+    target_player_id: payerPlayerId,
+    amount,
+    title_id: purchasedTitle.title_id,
+    purchased_title_id: purchasedTitleId,
+    requested_amount: null,
+    repayment_amount: null,
+    dice_count: diceCount,
+  });
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`pending_requests/${createdRequest.key}`]: createdRequest.value,
+  });
+};
+export const createTitleSaleRequest = async ({
+  roomId,
+  sellerPlayerId,
+  buyerPlayerId,
+  purchasedTitleId,
+  amount,
+}: {
+  roomId: string;
+  sellerPlayerId: string;
+  buyerPlayerId: string;
+  purchasedTitleId: string;
+  amount: number;
+}) => {
+  assertPositiveAmount(amount);
+
+  if (sellerPlayerId === buyerPlayerId) {
+    throw new GameError('Escolha outro jogador como comprador.');
+  }
+
+  const [seller, buyer, purchasedTitle] = await Promise.all([
+    getPlayer(sellerPlayerId),
+    getPlayer(buyerPlayerId),
+    getPurchasedTitle(purchasedTitleId),
+  ]);
+
+  assertPlayerInRoom(seller, roomId);
+  assertPlayerInRoom(buyer, roomId);
+
+  if (
+    purchasedTitle.room_id !== roomId ||
+    purchasedTitle.owner_player_id !== sellerPlayerId
+  ) {
+    throw new GameError('Voce nao possui este titulo.');
+  }
+
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: 'TITLE_SALE',
+    requester_player_id: sellerPlayerId,
+    target_player_id: buyerPlayerId,
+    amount: roundMoney(amount),
+    title_id: purchasedTitle.title_id,
+    purchased_title_id: purchasedTitleId,
+    requested_amount: null,
+    repayment_amount: null,
+    dice_count: null,
+  });
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`pending_requests/${createdRequest.key}`]: createdRequest.value,
+  });
+};
+export const acceptPendingRequest = async ({
+  requestId,
+  executedByPlayerId,
+}: {
+  requestId: string;
+  executedByPlayerId: string;
+}) => {
+  const request = await getPendingRequest(requestId);
+
+  if (request.target_player_id !== executedByPlayerId) {
+    throw new GameError('Esta solicitacao nao pertence a voce.');
+  }
+
+  if (request.kind === 'RENT_CHARGE' || request.kind === 'STOCK_CHARGE') {
+    const definition = getTitleDefinition(request.title_id);
+    await moveMoney({
+      roomId: request.room_id,
+      type: 'PLAYER_TO_PLAYER',
+      amount: request.amount,
+      fromPlayerId: request.target_player_id,
+      toPlayerId: request.requester_player_id,
+      executedByPlayerId,
+      reason:
+        request.kind === 'RENT_CHARGE'
+          ? `Aluguel - ${definition?.name ?? 'Titulo'}`
+          : `Acao - ${definition?.name ?? 'Titulo'}`,
+    });
+
+    await update(ref(realtimeDatabase), {
+      [`pending_requests/${request.id}`]: null,
+      [`rooms/${request.room_id}/last_played_at`]: now(),
+    });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {
+    [`pending_requests/${request.id}`]: null,
+    [`rooms/${request.room_id}/last_played_at`]: now(),
+  };
+
+  if (request.kind === 'TITLE_PURCHASE') {
+    if (!request.title_id) {
+      throw new GameError('Titulo invalido.');
+    }
+
+    const definition = getTitleDefinition(request.title_id);
+    const buyer = await getPlayer(request.target_player_id);
+
+    if (!definition) {
+      throw new GameError('Titulo invalido.');
+    }
+
+    assertPlayerInRoom(buyer, request.room_id);
+    await assertTitleAvailable(request.room_id, request.title_id);
+    addDirectPlayerToBankPayment({
+      updates,
+      roomId: request.room_id,
+      player: buyer,
+      amount: definition.purchase_price,
+      executedByPlayerId,
+      reason: `Compra de titulo - ${definition.name}`,
+    });
+
+    const purchasedTitle = createPurchasedTitleUpdate({
+      room_id: request.room_id,
+      title_id: definition.id,
+      owner_player_id: buyer.id,
+      kind: definition.kind as TitleKind,
+      purchase_price: definition.purchase_price,
+      houses: 0,
+      has_hotel: false,
+    });
+    updates[`purchased_titles/${purchasedTitle.key}`] = purchasedTitle.value;
+  }
+  if (request.kind === 'PLAYER_LOAN') {
+    const [borrower, creditor] = await Promise.all([
+      getPlayer(request.requester_player_id),
+      getPlayer(request.target_player_id),
+    ]);
+    const requestedAmount = request.requested_amount ?? request.amount;
+    const repaymentAmount = request.repayment_amount ?? request.amount;
+
+    assertPlayerInRoom(borrower, request.room_id);
+    assertPlayerInRoom(creditor, request.room_id);
+    addDirectPlayerToPlayerPayment({
+      updates,
+      roomId: request.room_id,
+      fromPlayer: creditor,
+      toPlayer: borrower,
+      amount: requestedAmount,
+      executedByPlayerId,
+      reason: 'Emprestimo entre jogadores',
+    });
+    addDebtToUpdates(updates, {
+      room_id: request.room_id,
+      from_player_id: borrower.id,
+      to_player_id: creditor.id,
+      original_amount: repaymentAmount,
+      remaining_amount: repaymentAmount,
+      reason: 'Emprestimo entre jogadores',
+    });
+  }
+
+  if (request.kind === 'TITLE_SALE') {
+    if (!request.purchased_title_id) {
+      throw new GameError('Titulo invalido.');
+    }
+
+    const [seller, buyer, purchasedTitle] = await Promise.all([
+      getPlayer(request.requester_player_id),
+      getPlayer(request.target_player_id),
+      getPurchasedTitle(request.purchased_title_id),
+    ]);
+    const definition = getTitleDefinition(purchasedTitle.title_id);
+
+    assertPlayerInRoom(seller, request.room_id);
+    assertPlayerInRoom(buyer, request.room_id);
+
+    if (purchasedTitle.owner_player_id !== seller.id) {
+      throw new GameError('Este titulo nao pertence mais ao vendedor.');
+    }
+
+    addDirectPlayerToPlayerPayment({
+      updates,
+      roomId: request.room_id,
+      fromPlayer: buyer,
+      toPlayer: seller,
+      amount: request.amount,
+      executedByPlayerId,
+      reason: `Compra de titulo - ${definition?.name ?? 'Titulo'}`,
+    });
+    updates[`purchased_titles/${purchasedTitle.id}/owner_player_id`] = buyer.id;
+    updates[`purchased_titles/${purchasedTitle.id}/updated_at`] = now();
+  }
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const declinePendingRequest = async ({
+  requestId,
+  executedByPlayerId,
+}: {
+  requestId: string;
+  executedByPlayerId: string;
+}) => {
+  const request = await getPendingRequest(requestId);
+
+  if (request.target_player_id !== executedByPlayerId) {
+    throw new GameError('Esta solicitacao nao pertence a voce.');
+  }
+
+  if (request.kind === 'RENT_CHARGE' || request.kind === 'STOCK_CHARGE') {
+    throw new GameError('Cobrancas de aluguel e acao precisam ser confirmadas.');
+  }
+
+  await update(ref(realtimeDatabase), {
+    [`pending_requests/${request.id}`]: null,
+    [`rooms/${request.room_id}/last_played_at`]: now(),
+  });
+};
 export const subscribeRoomsSnapshot = (
   callback: (snapshot: RoomListSnapshot) => void,
 ) =>
@@ -602,6 +1333,8 @@ export const subscribeRoomSnapshot = (
       players?: Record<string, Player>;
       transactions?: Record<string, Transaction>;
       debts?: Record<string, Debt>;
+      purchased_titles?: Record<string, PurchasedTitle>;
+      pending_requests?: Record<string, PendingRequest>;
     };
     const room = value.rooms?.[roomId];
 
@@ -627,6 +1360,16 @@ export const subscribeRoomSnapshot = (
       .map(([id, debt]) => ({ id, ...debt }))
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
 
+    const purchasedTitles = Object.entries(value.purchased_titles ?? {})
+      .filter(([, title]) => title.room_id === roomId)
+      .map(([id, title]) => ({ id, ...title }))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+    const pendingRequests = Object.entries(value.pending_requests ?? {})
+      .filter(([, request]) => request.room_id === roomId)
+      .map(([id, request]) => ({ id, ...request }))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
     callback({
       room: {
         id: roomId,
@@ -637,5 +1380,19 @@ export const subscribeRoomSnapshot = (
       players,
       transactions,
       debts,
+      purchasedTitles,
+      pendingRequests,
     });
   });
+
+
+
+
+
+
+
+
+
+
+
+
