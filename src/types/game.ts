@@ -5,9 +5,11 @@ export type TransactionType =
   | 'BANK_CHARGE_PLAYER';
 
 export type Room = {
+  name: string;
   code: string;
   banker_player_id: string | null;
   created_at: string;
+  last_played_at: string | null;
 };
 
 export type Player = {
@@ -28,4 +30,15 @@ export type Transaction = {
   executed_by_player_id: string;
   reason: string | null;
   created_at: string;
+};
+
+export type Debt = {
+  room_id: string;
+  from_player_id: string;
+  to_player_id: string | null;
+  original_amount: number;
+  remaining_amount: number;
+  reason: string | null;
+  created_at: string;
+  updated_at: string;
 };

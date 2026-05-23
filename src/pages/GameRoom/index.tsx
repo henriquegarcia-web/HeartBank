@@ -10,16 +10,19 @@ import {
   Row,
   Select,
   Space,
+  Steps,
   Table,
   Tabs,
   Tag,
   Typography,
 } from 'antd';
+import type { FormInstance } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useEffect, useMemo, useState } from 'react';
-import { Navigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
 
 import {
+  deleteRoom,
   enterRoomByCode,
   GameError,
   moveMoney,
@@ -27,7 +30,7 @@ import {
 } from '@/api/gameService';
 import { AppLayout } from '@/components/ui';
 import type { FirebaseRecord } from '@/types/firebase';
-import type { Player, Transaction } from '@/types/game';
+import type { Debt, Player, Transaction } from '@/types/game';
 import { formatCurrency } from '@/utils/formatters';
 
 type MoneyFormValues = {
@@ -37,26 +40,57 @@ type MoneyFormValues = {
 };
 
 type RoomState = {
+  id: string;
+  name: string;
   players: Array<FirebaseRecord<Player>>;
   transactions: Array<FirebaseRecord<Transaction>>;
+  debts: Array<FirebaseRecord<Debt>>;
   roomCode: string;
 };
 
-const REASON_OPTIONS = [
+type RankingPlayer = FirebaseRecord<Player> & {
+  assetValue: number;
+  rankingValue: number;
+};
+
+const QUICK_AMOUNTS = [20, 50, 100, 500, 1000];
+
+const PIX_REASON_OPTIONS = ['Aluguel', 'Acoes', 'Comprar Propriedade'].map(
+  (reason) => ({
+    label: reason,
+    value: reason,
+  }),
+);
+
+const BANK_PAYMENT_REASON_OPTIONS = [
   'Compra de Terreno',
-  'Compra de Ação',
+  'Compra de Acao',
   'Compra de Casa',
   'Compra de Hotel',
-  'Aluguel',
-  'Notícia',
-  'Ações',
-  'Bônus de Rodada',
-  'Empréstimo',
-  'Banco',
+  'Noticia',
+  'Imposto',
+  'Fianca',
 ].map((reason) => ({
   label: reason,
   value: reason,
 }));
+
+const BANK_ACTION_REASON_OPTIONS = [
+  'Noticia',
+  'Bonus de Rodada',
+  'Restituicao do Imposto',
+].map((reason) => ({
+  label: reason,
+  value: reason,
+}));
+
+const ASSET_REASONS = new Set([
+  'Compra de Terreno',
+  'Compra de Casa',
+  'Compra de Hotel',
+]);
+
+const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
 const getPlayerName = (
   players: Array<FirebaseRecord<Player>>,
@@ -79,6 +113,23 @@ const getTransactionSignal = (
 
   return transaction.type === 'BANK_TO_PLAYER' ? '+' : '-';
 };
+
+function QuickAmountButtons({ form }: { form: FormInstance<MoneyFormValues> }) {
+  const addAmount = (amount: number) => {
+    const currentAmount = Number(form.getFieldValue('amount') ?? 0);
+    form.setFieldValue('amount', roundMoney(currentAmount + amount));
+  };
+
+  return (
+    <Flex gap={8} wrap="wrap" style={{ marginTop: -12, marginBottom: 16 }}>
+      {QUICK_AMOUNTS.map((amount) => (
+        <Button key={amount} size="small" onClick={() => addAmount(amount)}>
+          +{amount}
+        </Button>
+      ))}
+    </Flex>
+  );
+}
 
 function TransactionHistoryList({
   transactions,
@@ -123,7 +174,7 @@ function TransactionHistoryList({
             >
               {signal} {formatCurrency(transaction.amount)}
             </Typography.Text>{' '}
-            | {getPlayerName(players, transaction.from_player_id)} →{' '}
+            | {getPlayerName(players, transaction.from_player_id)} {'->'}{' '}
             {getPlayerName(players, transaction.to_player_id)} |{' '}
             {transaction.reason || 'Sem motivo'}
           </Typography.Text>
@@ -134,7 +185,8 @@ function TransactionHistoryList({
 }
 
 export function GameRoom() {
-  const { message } = App.useApp();
+  const { message, modal, notification } = App.useApp();
+  const navigate = useNavigate();
   const { code, playerId } = useParams<{ code: string; playerId: string }>();
   const [state, setState] = useState<RoomState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -142,6 +194,8 @@ export function GameRoom() {
   const [bankPaymentForm] = Form.useForm<MoneyFormValues>();
   const [adminForm] = Form.useForm<MoneyFormValues>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const seenTransactionIdsRef = useRef<Set<string>>(new Set());
+  const didInitializeNotificationsRef = useRef(false);
 
   useEffect(() => {
     if (!code || !playerId) {
@@ -164,8 +218,11 @@ export function GameRoom() {
         }
 
         setState({
+          id: snapshot.room.id,
+          name: snapshot.room.name,
           players: snapshot.players,
           transactions: snapshot.transactions,
+          debts: snapshot.debts,
           roomCode: snapshot.room.code,
         });
       });
@@ -179,6 +236,42 @@ export function GameRoom() {
     return () => unsubscribe();
   }, [code, playerId]);
 
+  useEffect(() => {
+    if (!state || !playerId) {
+      return;
+    }
+
+    if (!didInitializeNotificationsRef.current) {
+      seenTransactionIdsRef.current = new Set(
+        state.transactions.map((transaction) => transaction.id),
+      );
+      didInitializeNotificationsRef.current = true;
+      return;
+    }
+
+    const newReceivedPixTransactions = state.transactions.filter(
+      (transaction) =>
+        !seenTransactionIdsRef.current.has(transaction.id) &&
+        transaction.type === 'PLAYER_TO_PLAYER' &&
+        transaction.to_player_id === playerId &&
+        transaction.executed_by_player_id !== playerId,
+    );
+
+    newReceivedPixTransactions.forEach((transaction) => {
+      notification.success({
+        message: 'Pix recebido',
+        description: `${getPlayerName(
+          state.players,
+          transaction.from_player_id,
+        )} enviou ${formatCurrency(transaction.amount)}.`,
+      });
+    });
+
+    state.transactions.forEach((transaction) => {
+      seenTransactionIdsRef.current.add(transaction.id);
+    });
+  }, [notification, playerId, state]);
+
   const currentPlayer = useMemo(
     () => state?.players.find((player) => player.id === playerId) ?? null,
     [playerId, state?.players],
@@ -187,7 +280,7 @@ export function GameRoom() {
   const playerOptions = useMemo(
     () =>
       (state?.players ?? []).map((player) => ({
-        label: `${player.name} - ${formatCurrency(player.balance)}`,
+        label: player.name,
         value: player.id,
         disabled: player.id === playerId,
       })),
@@ -202,6 +295,45 @@ export function GameRoom() {
       })),
     [state?.players],
   );
+
+  const currentPlayerDebts = useMemo(
+    () =>
+      (state?.debts ?? []).filter((debt) => debt.from_player_id === playerId),
+    [playerId, state?.debts],
+  );
+
+  const currentPlayerDebtTotal = useMemo(
+    () =>
+      currentPlayerDebts.reduce(
+        (total, debt) => total + debt.remaining_amount,
+        0,
+      ),
+    [currentPlayerDebts],
+  );
+
+  const rankedPlayers = useMemo<RankingPlayer[]>(() => {
+    const transactions = state?.transactions ?? [];
+
+    return (state?.players ?? [])
+      .map((player) => {
+        const assetValue = transactions
+          .filter(
+            (transaction) =>
+              transaction.from_player_id === player.id &&
+              ASSET_REASONS.has(transaction.reason ?? '') &&
+              (transaction.type === 'PLAYER_TO_BANK' ||
+                transaction.type === 'BANK_CHARGE_PLAYER'),
+          )
+          .reduce((total, transaction) => total + transaction.amount, 0);
+
+        return {
+          ...player,
+          assetValue,
+          rankingValue: roundMoney(player.balance + assetValue),
+        };
+      })
+      .sort((a, b) => b.rankingValue - a.rankingValue);
+  }, [state?.players, state?.transactions]);
 
   if (!code || !playerId) {
     return <Navigate to="/" replace />;
@@ -296,22 +428,99 @@ export function GameRoom() {
     }
   };
 
-  const playerColumns: ColumnsType<FirebaseRecord<Player>> = [
+  const handleDeleteRoom = () => {
+    if (!state || !currentPlayer) {
+      return;
+    }
+
+    modal.confirm({
+      title: 'Excluir sala?',
+      content: 'Esta acao remove a sala, jogadores, historico e dividas.',
+      okText: 'Excluir',
+      okButtonProps: { danger: true },
+      cancelText: 'Cancelar',
+      onOk: async () => {
+        try {
+          await deleteRoom(state.id, currentPlayer.id);
+          message.success('Sala excluida.');
+          navigate('/');
+        } catch (error) {
+          message.error(
+            error instanceof GameError
+              ? error.message
+              : 'Nao foi possivel excluir a sala.',
+          );
+        }
+      },
+    });
+  };
+
+  const rankingItems = rankedPlayers.map((player) => ({
+    title: player.name,
+    description: `Saldo: ${formatCurrency(player.balance)} - Patrimônio: ${formatCurrency(
+      player.assetValue,
+    )}`,
+  }));
+
+  const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
-      title: 'Jogador',
-      dataIndex: 'name',
-      render: (name: string, player) => (
-        <Space>
-          {name}
-          {player.is_banker ? <Tag color="gold">Banqueiro</Tag> : null}
-        </Space>
-      ),
+      title: 'Quem deve',
+      dataIndex: 'from_player_id',
+      render: (fromPlayerId: string) =>
+        getPlayerName(state?.players ?? [], fromPlayerId),
     },
     {
-      title: 'Saldo',
-      dataIndex: 'balance',
+      title: 'Para quem',
+      dataIndex: 'to_player_id',
+      render: (toPlayerId: string | null) =>
+        getPlayerName(state?.players ?? [], toPlayerId),
+    },
+    {
+      title: 'Motivo',
+      dataIndex: 'reason',
+      responsive: ['md'],
+      render: (reason: string | null) => reason || 'Sem motivo',
+    },
+    {
+      title: 'Valor',
+      dataIndex: 'remaining_amount',
       align: 'right',
-      render: (balance: number) => formatCurrency(balance),
+      render: (remainingAmount: number) => (
+        <Typography.Text type="danger" strong>
+          {formatCurrency(remainingAmount)}
+        </Typography.Text>
+      ),
+    },
+  ];
+  const personalDebtColumns = debtColumns.filter(
+    (column) =>
+      !('dataIndex' in column) || column.dataIndex !== 'from_player_id',
+  );
+  const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
+    {
+      title: 'Devedor -> Credor',
+      key: 'debtRelation',
+      render: (_, debt) =>
+        `${getPlayerName(state?.players ?? [], debt.from_player_id)} -> ${getPlayerName(
+          state?.players ?? [],
+          debt.to_player_id,
+        )}`,
+    },
+    {
+      title: 'Motivo',
+      dataIndex: 'reason',
+      responsive: ['md'],
+      render: (reason: string | null) => reason || 'Sem motivo',
+    },
+    {
+      title: 'Valor',
+      dataIndex: 'remaining_amount',
+      align: 'right',
+      render: (remainingAmount: number) => (
+        <Typography.Text type="danger" strong>
+          {formatCurrency(remainingAmount)}
+        </Typography.Text>
+      ),
     },
   ];
 
@@ -330,16 +539,23 @@ export function GameRoom() {
               <Flex justify="space-between" gap={16} wrap="wrap">
                 <Flex vertical gap={4}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Sala {state?.roomCode}
+                    {state?.name} | Sala {state?.roomCode}
                   </Typography.Text>
                   <Typography.Title level={4} style={{ margin: 0 }}>
                     {currentPlayer?.name}
                   </Typography.Title>
-                  {currentPlayer?.is_banker ? (
-                    <Tag color="gold" style={{ width: 'fit-content' }}>
-                      Banqueiro
-                    </Tag>
-                  ) : null}
+                  <Space>
+                    {currentPlayer?.is_banker ? (
+                      <Tag color="gold" style={{ width: 'fit-content' }}>
+                        Banqueiro
+                      </Tag>
+                    ) : null}
+                    {currentPlayer?.is_banker ? (
+                      <Button size="small" danger onClick={handleDeleteRoom}>
+                        Excluir sala
+                      </Button>
+                    ) : null}
+                  </Space>
                 </Flex>
                 <Flex vertical align="flex-end" gap={4}>
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -348,6 +564,11 @@ export function GameRoom() {
                   <Typography.Title level={4} style={{ margin: 0 }}>
                     {formatCurrency(currentPlayer?.balance ?? 0)}
                   </Typography.Title>
+                  {currentPlayerDebtTotal > 0 ? (
+                    <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                      Dividas: {formatCurrency(currentPlayerDebtTotal)}
+                    </Typography.Text>
+                  ) : null}
                 </Flex>
               </Flex>
             </Card>
@@ -358,7 +579,7 @@ export function GameRoom() {
           items={[
             {
               key: 'player',
-              label: 'Jogador',
+              label: 'Principal',
               children: (
                 <Row gutter={[16, 16]}>
                   <Col xs={24} lg={12}>
@@ -395,13 +616,16 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
+                        <QuickAmountButtons form={pixForm} />
                         <Form.Item
                           name="reason"
                           label="Motivo"
-                          rules={[{ required: true, message: 'Escolha o motivo.' }]}
+                          rules={[
+                            { required: true, message: 'Escolha o motivo.' },
+                          ]}
                         >
                           <Select
-                            options={REASON_OPTIONS}
+                            options={PIX_REASON_OPTIONS}
                             placeholder="Selecione o motivo"
                           />
                         </Form.Item>
@@ -440,13 +664,16 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
+                        <QuickAmountButtons form={bankPaymentForm} />
                         <Form.Item
                           name="reason"
                           label="Motivo"
-                          rules={[{ required: true, message: 'Escolha o motivo.' }]}
+                          rules={[
+                            { required: true, message: 'Escolha o motivo.' },
+                          ]}
                         >
                           <Select
-                            options={REASON_OPTIONS}
+                            options={BANK_PAYMENT_REASON_OPTIONS}
                             placeholder="Selecione o motivo"
                           />
                         </Form.Item>
@@ -463,13 +690,36 @@ export function GameRoom() {
                     </Card>
                   </Col>
 
-                  <Col span={24}>
-                    <Card title="Historico Individual">
-                      <TransactionHistoryList
-                        transactions={personalTransactions}
-                        players={state?.players ?? []}
-                        perspectivePlayerId={playerId}
+                  <Col xs={24} lg={10}>
+                    <Card title="Dividas ativas">
+                      <Table
+                        rowKey="id"
+                        columns={personalDebtColumns}
+                        dataSource={currentPlayerDebts}
+                        pagination={false}
                       />
+                    </Card>
+                  </Col>
+                </Row>
+              ),
+            },
+            {
+              key: 'ranking',
+              label: 'Ranking',
+              children: (
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={14}>
+                    <Card title="Ranking">
+                      {rankingItems.length > 0 ? (
+                        <Steps
+                          orientation="vertical"
+                          current={0}
+                          size="small"
+                          items={rankingItems}
+                        />
+                      ) : (
+                        <Empty description="Sem jogadores" />
+                      )}
                     </Card>
                   </Col>
                 </Row>
@@ -521,6 +771,7 @@ export function GameRoom() {
                                   prefix="R$"
                                 />
                               </Form.Item>
+                              <QuickAmountButtons form={adminForm} />
                               <Form.Item
                                 name="reason"
                                 label="Motivo"
@@ -532,7 +783,7 @@ export function GameRoom() {
                                 ]}
                               >
                                 <Select
-                                  options={REASON_OPTIONS}
+                                  options={BANK_ACTION_REASON_OPTIONS}
                                   placeholder="Selecione o motivo"
                                 />
                               </Form.Item>
@@ -559,21 +810,14 @@ export function GameRoom() {
                             </Form>
                           </Card>
                         </Col>
-                        <Col xs={24} lg={14}>
-                          <Card title="Jogadores e saldos">
+
+                        <Col xs={24} lg={10}>
+                          <Card title="Dividas ativas">
                             <Table
                               rowKey="id"
-                              columns={playerColumns}
-                              dataSource={state?.players ?? []}
+                              columns={bankerDebtColumns}
+                              dataSource={state?.debts ?? []}
                               pagination={false}
-                            />
-                          </Card>
-                        </Col>
-                        <Col span={24}>
-                          <Card title="Historico Geral">
-                            <TransactionHistoryList
-                              transactions={state?.transactions ?? []}
-                              players={state?.players ?? []}
                             />
                           </Card>
                         </Col>
@@ -582,6 +826,33 @@ export function GameRoom() {
                   },
                 ]
               : []),
+            {
+              key: 'history',
+              label: 'Histórico',
+              children: (
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={14}>
+                    <Card title="Histórico Individual">
+                      <TransactionHistoryList
+                        transactions={personalTransactions}
+                        players={state?.players ?? []}
+                        perspectivePlayerId={playerId}
+                      />
+                    </Card>
+                  </Col>
+                  {currentPlayer?.is_banker ? (
+                    <Col xs={24} lg={10}>
+                      <Card title="Histórico Geral">
+                        <TransactionHistoryList
+                          transactions={state?.transactions ?? []}
+                          players={state?.players ?? []}
+                        />
+                      </Card>
+                    </Col>
+                  ) : null}
+                </Row>
+              ),
+            },
           ]}
         />
       </Flex>
