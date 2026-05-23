@@ -31,4 +31,16 @@ export const GlobalStyles = createGlobalStyle`
   #root {
     min-height: 100vh;
   }
+
+  .ant-steps-item-title {
+    width: 100%;
+  }
+
+  .ant-card-head {
+    min-height: 44px !important;
+  }
+
+  .ant-card-head, .ant-card-body {
+    padding-inline: 16px !important;
+  }
 `;

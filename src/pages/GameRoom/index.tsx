@@ -23,14 +23,7 @@ import type { FormInstance } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import {
-  LuCopy,
-  LuDices,
-  LuHouse,
-  LuHotel,
-  LuPiggyBank,
-  LuWallet,
-} from 'react-icons/lu';
+import { LuDices, LuHouse, LuHotel, LuWallet } from 'react-icons/lu';
 
 import {
   acceptPendingRequest,
@@ -101,7 +94,6 @@ type RoomState = {
   debts: Array<FirebaseRecord<Debt>>;
   purchasedTitles: Array<FirebaseRecord<PurchasedTitle>>;
   pendingRequests: Array<FirebaseRecord<PendingRequest>>;
-  roomCode: string;
 };
 
 type RankingPlayer = FirebaseRecord<Player> & {
@@ -281,7 +273,7 @@ function TransactionHistoryList({
                   whiteSpace: 'normal',
                 }}
               >
-                {getPlayerName(players, transaction.from_player_id)} {'?'}{' '}
+                {getPlayerName(players, transaction.from_player_id)} {'→'}{' '}
                 {getPlayerName(players, transaction.to_player_id)}
               </Typography.Text>
             </Flex>
@@ -465,7 +457,6 @@ export function GameRoom() {
           debts: snapshot.debts,
           purchasedTitles: snapshot.purchasedTitles,
           pendingRequests: snapshot.pendingRequests,
-          roomCode: snapshot.room.code,
         });
       });
     };
@@ -835,11 +826,19 @@ export function GameRoom() {
           : definition.acquisition.hotel_price
         : 0;
 
+    if (currentPlayerDebtTotal > 0) {
+      message.error('Quite suas dívidas antes de comprar casas ou hotel.');
+      return;
+    }
+
+    if ((currentPlayer?.balance ?? 0) < amount) {
+      message.error('Saldo insuficiente.');
+      return;
+    }
+
     modal.confirm({
       title: upgrade === 'HOUSE' ? 'Comprar casa?' : 'Comprar hotel?',
-      content: `Confirmar compra de ${formatCurrency(
-        amount,
-      )}? Se o saldo não cobrir tudo, o restante vira dívida.`,
+      content: `Você vai pagar ${formatCurrency(amount)} do seu saldo.`,
       okText: 'Confirmar',
       cancelText: 'Cancelar',
       onOk: () =>
@@ -956,17 +955,6 @@ export function GameRoom() {
     );
   };
 
-  const handleCopyRoomCode = async () => {
-    const roomCode = state?.roomCode ?? '';
-
-    if (!roomCode) {
-      return;
-    }
-
-    await navigator.clipboard.writeText(roomCode);
-    message.success('Código da sala copiado.');
-  };
-
   const handleDeleteRoom = () => {
     if (!state || !currentPlayer) {
       return;
@@ -996,23 +984,17 @@ export function GameRoom() {
   };
 
   const rankingItems = rankedPlayers.map((player) => ({
-    title: player.name.toUpperCase(),
-    content: (
-      <Space wrap>
+    title: (
+      <Flex justify="space-between">
+        <Typography.Text strong>{player.name.toUpperCase()}</Typography.Text>
         <Typography.Text
           style={{ display: 'flex', alignItems: 'center', gap: 5 }}
         >
-          <LuWallet aria-label="Saldo" /> {formatCurrency(player.balance)}
+          <LuWallet aria-label="Total" /> {formatCurrency(player.rankingValue)}
         </Typography.Text>
-        -
-        <Typography.Text
-          style={{ display: 'flex', alignItems: 'center', gap: 5 }}
-        >
-          <LuPiggyBank aria-label="Patrimônio" />{' '}
-          {formatCurrency(player.assetValue)}
-        </Typography.Text>
-      </Space>
+      </Flex>
     ),
+    content: <Space wrap></Space>,
   }));
 
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
@@ -1066,10 +1048,10 @@ export function GameRoom() {
   );
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
-      title: 'Devedor ? Credor',
+      title: 'Devedor / Credor',
       key: 'debtRelation',
       render: (_, debt) =>
-        `${getPlayerName(state?.players ?? [], debt.from_player_id)} ? ${getPlayerName(
+        `${getPlayerName(state?.players ?? [], debt.from_player_id)} → ${getPlayerName(
           state?.players ?? [],
           debt.to_player_id,
         )}`,
@@ -1261,13 +1243,14 @@ export function GameRoom() {
           <Flex vertical gap={12}>
             <Space wrap>
               {title.has_hotel ? (
-                <Tag icon={<LuHotel />}>Hotel</Tag>
+                <LuHotel size={30} aria-label="Hotel comprado" />
               ) : (
                 Array.from({ length: title.houses }, (_, index) => (
-                  <Tag key={index} icon={<LuHouse />}>
-                    {' '}
-                    Casa {index + 1}
-                  </Tag>
+                  <LuHouse
+                    key={index}
+                    size={30}
+                    aria-label={`Casa ${index + 1} comprada`}
+                  />
                 ))
               )}
               {!title.has_hotel && title.houses === 0 ? (
@@ -1306,7 +1289,13 @@ export function GameRoom() {
             <Flex gap={8} wrap="wrap">
               <Button
                 icon={<LuHouse />}
-                disabled={title.has_hotel || title.houses >= 4}
+                disabled={
+                  title.has_hotel ||
+                  title.houses >= 4 ||
+                  currentPlayerDebtTotal > 0 ||
+                  (currentPlayer?.balance ?? 0) <
+                    definition.acquisition.house_price
+                }
                 loading={isSubmitting}
                 onClick={() => void handleUpgradeTitle(title.id, 'HOUSE')}
               >
@@ -1314,7 +1303,13 @@ export function GameRoom() {
               </Button>
               <Button
                 icon={<LuHotel />}
-                disabled={title.has_hotel || title.houses !== 4}
+                disabled={
+                  title.has_hotel ||
+                  title.houses !== 4 ||
+                  currentPlayerDebtTotal > 0 ||
+                  (currentPlayer?.balance ?? 0) <
+                    definition.acquisition.hotel_price
+                }
                 loading={isSubmitting}
                 onClick={() => void handleUpgradeTitle(title.id, 'HOTEL')}
               >
@@ -1352,17 +1347,6 @@ export function GameRoom() {
             <Card loading={isLoading}>
               <Flex justify="space-between" gap={16} wrap="wrap">
                 <Flex vertical gap={4}>
-                  <Space>
-                    <Button
-                      aria-label="Copiar código da sala"
-                      size="small"
-                      variant="text"
-                      icon={<LuCopy />}
-                      onClick={() => void handleCopyRoomCode()}
-                    >
-                      Sala {state?.roomCode}
-                    </Button>
-                  </Space>
                   <Typography.Title level={4} style={{ margin: 0 }}>
                     {currentPlayer?.name}
                   </Typography.Title>
@@ -1446,7 +1430,7 @@ export function GameRoom() {
                             htmlType="submit"
                             loading={isSubmitting}
                           >
-                            Confirmar Pagamento
+                            Confirmar pagamento
                           </Button>
                         </Flex>
                       </Form>
@@ -1465,7 +1449,7 @@ export function GameRoom() {
                   </Col>
 
                   <Col xs={24} lg={12}>
-                    <Card title="Valores a receber">
+                    <Card title="Valores à receber">
                       <Table
                         rowKey="id"
                         columns={personalReceivableColumns}
@@ -1632,7 +1616,7 @@ export function GameRoom() {
                                   ? 'Quite suas dívidas ativas antes de comprar títulos.'
                                   : (currentPlayer?.balance ?? 0) >=
                                       selectedTitle.purchase_price
-                                    ? 'A compra cria uma confirmação persistente antes do registro.'
+                                    ? 'Depois de pedir, confirme a compra para ganhar o título.'
                                     : 'Saldo insuficiente.'
                               }
                               style={{ marginBottom: 16 }}
@@ -1798,7 +1782,7 @@ export function GameRoom() {
                           <Card title="Configurações">
                             <Flex vertical gap={8}>
                               <Typography.Text type="secondary">
-                                Sala {state?.roomCode}
+                                Sala {state?.name}
                               </Typography.Text>
                               <Button danger onClick={handleDeleteRoom}>
                                 Excluir sala

@@ -81,10 +81,10 @@ export function Home() {
             >
               <Form.Item
                 name="roomName"
-                label="Nome da sala"
+                label="Nome da Sala"
                 rules={[{ required: true, message: 'Informe o nome da sala.' }]}
               >
-                <Input size="large" placeholder="Mesa de sábado" />
+                <Input size="large" placeholder="Mesa de Sábado" />
               </Form.Item>
               <Button
                 block

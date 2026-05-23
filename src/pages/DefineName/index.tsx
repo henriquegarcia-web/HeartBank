@@ -96,9 +96,9 @@ export function DefineName() {
           <Form layout="vertical" requiredMark={false} onFinish={handleContinue}>
             <Flex vertical gap={16}>
               <Flex vertical gap={4}>
-                <Typography.Text type="secondary">Código da sala</Typography.Text>
+                <Typography.Text type="secondary">Sala</Typography.Text>
                 <Typography.Title level={2} style={{ margin: 0 }}>
-                  {code.toUpperCase()}
+                  {room?.name ?? code.toUpperCase()}
                 </Typography.Title>
               </Flex>
 
@@ -120,7 +120,7 @@ export function DefineName() {
                 htmlType="submit"
                 loading={isSubmitting}
               >
-                Continuar
+                Entrar
               </Button>
 
               <Divider style={{ margin: '4px 0' }}>Perfis existentes</Divider>
