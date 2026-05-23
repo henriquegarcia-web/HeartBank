@@ -1,4 +1,4 @@
-import { get, onValue, push, ref, update } from 'firebase/database';
+﻿import { get, onValue, push, ref, update } from 'firebase/database';
 
 import { listRecords } from '@/api/firebaseDatabase';
 import { getBankLoanAmountByNetWorth } from '@/constants/bankLoans';
@@ -99,7 +99,7 @@ export const createRoom = async (name: string) => {
   });
 
   if (!roomRef.key) {
-    throw new GameError('Nao foi possivel criar a sala.');
+    throw new GameError('Não foi possível criar a sala.');
   }
 
   return {
@@ -115,7 +115,7 @@ export const deleteRoom = async (
   const roomSnapshot = await get(ref(realtimeDatabase, `rooms/${roomId}`));
 
   if (!roomSnapshot.exists()) {
-    throw new GameError('Sala nao encontrada.');
+    throw new GameError('Sala não encontrada.');
   }
 
   const room = {
@@ -179,13 +179,13 @@ export const deleteRoom = async (
 
 export const enterRoomByCode = async (code: string) => {
   if (!code.trim()) {
-    throw new GameError('Informe o codigo da sessao.');
+    throw new GameError('Informe o código da sessão.');
   }
 
   const room = await getRoomByCode(code);
 
   if (!room) {
-    throw new GameError('Sessao nao encontrada.');
+    throw new GameError('Sessão não encontrada.');
   }
 
   return room;
@@ -232,7 +232,7 @@ export const enterPlayerProfile = async ({
   const playerRef = push(ref(realtimeDatabase, 'players'));
 
   if (!playerRef.key) {
-    throw new GameError('Nao foi possivel criar o jogador.');
+    throw new GameError('Não foi possível criar o jogador.');
   }
 
   const player: Player = {
@@ -270,7 +270,7 @@ const getPlayer = async (playerId: string) => {
   const snapshot = await get(ref(realtimeDatabase, `players/${playerId}`));
 
   if (!snapshot.exists()) {
-    throw new GameError('Jogador nao encontrado.');
+    throw new GameError('Jogador não encontrado.');
   }
 
   return {
@@ -285,7 +285,7 @@ const getPurchasedTitle = async (purchasedTitleId: string) => {
   );
 
   if (!snapshot.exists()) {
-    throw new GameError('Titulo nao encontrado.');
+    throw new GameError('Título não encontrado.');
   }
 
   return {
@@ -300,7 +300,7 @@ const getPendingRequest = async (requestId: string) => {
   );
 
   if (!snapshot.exists()) {
-    throw new GameError('Solicitacao nao encontrada.');
+    throw new GameError('Solicitação não encontrada.');
   }
 
   return {
@@ -313,7 +313,7 @@ const createTransactionUpdate = (transaction: TransferTransaction) => {
   const transactionRef = push(ref(realtimeDatabase, 'transactions'));
 
   if (!transactionRef.key) {
-    throw new GameError('Nao foi possivel registrar a transacao.');
+    throw new GameError('Não foi possível registrar a transação.');
   }
 
   return {
@@ -329,7 +329,7 @@ const createDebtUpdate = (debt: Omit<Debt, 'created_at' | 'updated_at'>) => {
   const debtRef = push(ref(realtimeDatabase, 'debts'));
 
   if (!debtRef.key) {
-    throw new GameError('Nao foi possivel registrar a divida.');
+    throw new GameError('Não foi possível registrar a dívida.');
   }
 
   const createdAt = now();
@@ -350,7 +350,7 @@ const createPendingRequestUpdate = (
   const requestRef = push(ref(realtimeDatabase, 'pending_requests'));
 
   if (!requestRef.key) {
-    throw new GameError('Nao foi possivel registrar a solicitacao.');
+    throw new GameError('Não foi possível registrar a solicitação.');
   }
 
   return {
@@ -368,7 +368,7 @@ const createPurchasedTitleUpdate = (
   const titleRef = push(ref(realtimeDatabase, 'purchased_titles'));
 
   if (!titleRef.key) {
-    throw new GameError('Nao foi possivel registrar o titulo.');
+    throw new GameError('Não foi possível registrar o título.');
   }
 
   const createdAt = now();
@@ -385,19 +385,19 @@ const createPurchasedTitleUpdate = (
 
 const assertCanDebit = (player: FirebaseRecord<Player>, amount: number) => {
   if (!ALLOW_NEGATIVE_BALANCE && player.balance < amount) {
-    throw new GameError('Saldo insuficiente para esta operacao.');
+    throw new GameError('Saldo insuficiente para esta operação.');
   }
 };
 
 const assertBanker = (player: FirebaseRecord<Player>) => {
   if (!player.is_banker) {
-    throw new GameError('Apenas o banqueiro pode executar esta acao.');
+    throw new GameError('Apenas o banqueiro pode executar esta ação.');
   }
 };
 
 const assertPlayerInRoom = (player: FirebaseRecord<Player>, roomId: string) => {
   if (player.room_id !== roomId) {
-    throw new GameError('Jogador invalido para esta sala.');
+    throw new GameError('Jogador inválido para esta sala.');
   }
 };
 
@@ -439,7 +439,7 @@ const assertTitleAvailable = async (roomId: string, titleId: string) => {
   );
 
   if (isPurchased) {
-    throw new GameError('Este titulo ja foi comprado.');
+    throw new GameError('Este título já foi comprado.');
   }
 };
 
@@ -456,7 +456,7 @@ const assertNoActiveDebtForTitlePurchase = async (
   );
 
   if (hasActiveDebt) {
-    throw new GameError('Quite suas dividas ativas antes de comprar titulos.');
+    throw new GameError('Quite suas dívidas ativas antes de comprar títulos.');
   }
 };
 
@@ -666,19 +666,19 @@ export const moveMoney = async ({
   const toPlayer = toPlayerId ? await getPlayer(toPlayerId) : null;
 
   if (fromPlayer && fromPlayer.room_id !== roomId) {
-    throw new GameError('Jogador de origem invalido para esta sala.');
+    throw new GameError('Jogador de origem inválido para esta sala.');
   }
 
   if (toPlayer && toPlayer.room_id !== roomId) {
-    throw new GameError('Jogador de destino invalido para esta sala.');
+    throw new GameError('Jogador de destino inválido para esta sala.');
   }
 
   if (executedByPlayer.room_id !== roomId) {
-    throw new GameError('Executor invalido para esta sala.');
+    throw new GameError('Executor inválido para esta sala.');
   }
 
   if (type === 'PLAYER_TO_PLAYER' && fromPlayerId === toPlayerId) {
-    throw new GameError('Nao e permitido fazer Pix para si mesmo.');
+    throw new GameError('Não é permitido fazer Pix para si mesmo.');
   }
 
   if (type === 'PLAYER_TO_BANK') {
@@ -688,7 +688,7 @@ export const moveMoney = async ({
 
     if (executedByPlayerId !== fromPlayerId) {
       throw new GameError(
-        'Jogador so pode pagar ao banco com o proprio saldo.',
+        'Jogador só pode pagar ao banco com o próprio saldo.',
       );
     }
   }
@@ -777,7 +777,7 @@ export const payDebt = async ({
   const debtSnapshot = await get(ref(realtimeDatabase, `debts/${debtId}`));
 
   if (!debtSnapshot.exists()) {
-    throw new GameError('Divida nao encontrada.');
+    throw new GameError('Dívida não encontrada.');
   }
 
   const debt = {
@@ -786,11 +786,11 @@ export const payDebt = async ({
   };
 
   if (debt.room_id !== roomId || debt.remaining_amount <= 0) {
-    throw new GameError('Divida invalida para esta sala.');
+    throw new GameError('Dívida inválida para esta sala.');
   }
 
   if (debt.from_player_id !== executedByPlayerId) {
-    throw new GameError('Apenas o devedor pode pagar esta divida.');
+    throw new GameError('Apenas o devedor pode pagar esta dívida.');
   }
 
   const debtor = await getPlayer(debt.from_player_id);
@@ -825,7 +825,7 @@ export const payDebt = async ({
     from_player_id: debtor.id,
     to_player_id: creditor?.id ?? null,
     executed_by_player_id: executedByPlayerId,
-    reason: debt.reason ?? 'Pagamento de divida',
+    reason: debt.reason ?? 'Pagamento de dívida',
   });
 
   await update(ref(realtimeDatabase), updates);
@@ -853,7 +853,7 @@ export const createBankLoan = async ({
   );
 
   if (hasActiveDebt) {
-    throw new GameError('Quite suas dividas ativas antes de pedir emprestimo.');
+    throw new GameError('Quite suas dívidas ativas antes de pedir empréstimo.');
   }
 
   const assetValue = purchasedTitles
@@ -877,7 +877,7 @@ export const createBankLoan = async ({
     from_player_id: null,
     to_player_id: playerId,
     executed_by_player_id: playerId,
-    reason: 'Emprestimo bancario',
+    reason: 'Empréstimo bancário',
   });
   addDebtToUpdates(updates, {
     room_id: roomId,
@@ -885,7 +885,7 @@ export const createBankLoan = async ({
     to_player_id: null,
     original_amount: loanAmount,
     remaining_amount: loanAmount,
-    reason: 'Emprestimo bancario',
+    reason: 'Empréstimo bancário',
   });
 
   await update(ref(realtimeDatabase), updates);
@@ -952,7 +952,7 @@ export const requestTitlePurchase = async ({
   const definition = getTitleDefinition(titleId);
 
   if (!definition) {
-    throw new GameError('Titulo invalido.');
+    throw new GameError('Título inválido.');
   }
 
   const player = await getPlayer(playerId);
@@ -1003,7 +1003,7 @@ export const upgradePurchasedTitle = async ({
     purchasedTitle.room_id !== roomId ||
     purchasedTitle.owner_player_id !== playerId
   ) {
-    throw new GameError('Voce nao possui este titulo.');
+    throw new GameError('Você não possui este título.');
   }
 
   if (!definition || definition.kind !== 'LAND') {
@@ -1017,7 +1017,7 @@ export const upgradePurchasedTitle = async ({
 
   if (upgrade === 'HOUSE') {
     if (purchasedTitle.has_hotel || purchasedTitle.houses >= 4) {
-      throw new GameError('Este terreno nao pode receber mais casas.');
+      throw new GameError('Este terreno não pode receber mais casas.');
     }
 
     addFlexiblePlayerToBankPayment({
@@ -1032,7 +1032,7 @@ export const upgradePurchasedTitle = async ({
       purchasedTitle.houses + 1;
   } else {
     if (purchasedTitle.has_hotel || purchasedTitle.houses !== 4) {
-      throw new GameError('O hotel so pode ser comprado depois de 4 casas.');
+      throw new GameError('O hotel só pode ser comprado depois de 4 casas.');
     }
 
     addFlexiblePlayerToBankPayment({
@@ -1077,7 +1077,7 @@ export const createRentChargeRequest = async ({
     purchasedTitle.room_id !== roomId ||
     purchasedTitle.owner_player_id !== ownerPlayerId
   ) {
-    throw new GameError('Voce nao possui este terreno.');
+    throw new GameError('Você não possui este terreno.');
   }
 
   assertPositiveAmount(amount);
@@ -1136,11 +1136,11 @@ export const createStockChargeRequest = async ({
     purchasedTitle.room_id !== roomId ||
     purchasedTitle.owner_player_id !== ownerPlayerId
   ) {
-    throw new GameError('Voce nao possui esta acao.');
+    throw new GameError('Você não possui esta ação.');
   }
 
   if (!definition || definition.kind !== 'STOCK') {
-    throw new GameError('Titulo de acao invalido.');
+    throw new GameError('Título de ação inválido.');
   }
 
   const amount = diceCount * definition.multiplier;
@@ -1194,7 +1194,7 @@ export const createTitleSaleRequest = async ({
     purchasedTitle.room_id !== roomId ||
     purchasedTitle.owner_player_id !== sellerPlayerId
   ) {
-    throw new GameError('Voce nao possui este titulo.');
+    throw new GameError('Você não possui este título.');
   }
 
   const createdRequest = createPendingRequestUpdate({
@@ -1225,7 +1225,7 @@ export const acceptPendingRequest = async ({
   const request = await getPendingRequest(requestId);
 
   if (request.target_player_id !== executedByPlayerId) {
-    throw new GameError('Esta solicitacao nao pertence a voce.');
+    throw new GameError('Esta solicitação não pertence a você.');
   }
 
   if (request.kind === 'RENT_CHARGE' || request.kind === 'STOCK_CHARGE') {
@@ -1239,8 +1239,8 @@ export const acceptPendingRequest = async ({
       executedByPlayerId,
       reason:
         request.kind === 'RENT_CHARGE'
-          ? `Aluguel - ${definition?.name ?? 'Titulo'}`
-          : `Acao - ${definition?.name ?? 'Titulo'}`,
+          ? `Aluguel - ${definition?.name ?? 'Título'}`
+          : `Ação - ${definition?.name ?? 'Título'}`,
     });
 
     await update(ref(realtimeDatabase), {
@@ -1257,14 +1257,14 @@ export const acceptPendingRequest = async ({
 
   if (request.kind === 'TITLE_PURCHASE') {
     if (!request.title_id) {
-      throw new GameError('Titulo invalido.');
+      throw new GameError('Título inválido.');
     }
 
     const definition = getTitleDefinition(request.title_id);
     const buyer = await getPlayer(request.target_player_id);
 
     if (!definition) {
-      throw new GameError('Titulo invalido.');
+      throw new GameError('Título inválido.');
     }
 
     assertPlayerInRoom(buyer, request.room_id);
@@ -1276,7 +1276,7 @@ export const acceptPendingRequest = async ({
       player: buyer,
       amount: definition.purchase_price,
       executedByPlayerId,
-      reason: `Compra de titulo - ${definition.name}`,
+      reason: `Compra de título - ${definition.name}`,
     });
 
     const purchasedTitle = createPurchasedTitleUpdate({
@@ -1307,7 +1307,7 @@ export const acceptPendingRequest = async ({
       toPlayer: borrower,
       amount: requestedAmount,
       executedByPlayerId,
-      reason: 'Emprestimo entre jogadores',
+      reason: 'Empréstimo entre jogadores',
     });
     addDebtToUpdates(updates, {
       room_id: request.room_id,
@@ -1315,13 +1315,13 @@ export const acceptPendingRequest = async ({
       to_player_id: creditor.id,
       original_amount: repaymentAmount,
       remaining_amount: repaymentAmount,
-      reason: 'Emprestimo entre jogadores',
+      reason: 'Empréstimo entre jogadores',
     });
   }
 
   if (request.kind === 'TITLE_SALE') {
     if (!request.purchased_title_id) {
-      throw new GameError('Titulo invalido.');
+      throw new GameError('Título inválido.');
     }
 
     const [seller, buyer, purchasedTitle] = await Promise.all([
@@ -1335,7 +1335,7 @@ export const acceptPendingRequest = async ({
     assertPlayerInRoom(buyer, request.room_id);
 
     if (purchasedTitle.owner_player_id !== seller.id) {
-      throw new GameError('Este titulo nao pertence mais ao vendedor.');
+      throw new GameError('Este título não pertence mais ao vendedor.');
     }
 
     addDirectPlayerToPlayerPayment({
@@ -1345,7 +1345,7 @@ export const acceptPendingRequest = async ({
       toPlayer: seller,
       amount: request.amount,
       executedByPlayerId,
-      reason: `Compra de titulo - ${definition?.name ?? 'Titulo'}`,
+      reason: `Compra de título - ${definition?.name ?? 'Título'}`,
     });
     updates[`purchased_titles/${purchasedTitle.id}/owner_player_id`] = buyer.id;
     updates[`purchased_titles/${purchasedTitle.id}/updated_at`] = now();
@@ -1364,11 +1364,11 @@ export const declinePendingRequest = async ({
   const request = await getPendingRequest(requestId);
 
   if (request.target_player_id !== executedByPlayerId) {
-    throw new GameError('Esta solicitacao nao pertence a voce.');
+    throw new GameError('Esta solicitação não pertence a você.');
   }
 
   if (request.kind === 'RENT_CHARGE' || request.kind === 'STOCK_CHARGE') {
-    throw new GameError('Cobrancas de aluguel e acao precisam ser confirmadas.');
+    throw new GameError('Cobranças de aluguel e ação precisam ser confirmadas.');
   }
 
   await update(ref(realtimeDatabase), {

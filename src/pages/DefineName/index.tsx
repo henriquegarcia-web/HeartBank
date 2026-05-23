@@ -1,4 +1,4 @@
-import { App, Button, Card, Divider, Empty, Flex, Form, Input, Typography } from 'antd';
+﻿import { App, Button, Card, Divider, Empty, Flex, Form, Input, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 
@@ -76,7 +76,7 @@ export function DefineName() {
       message.error(
         error instanceof GameError
           ? error.message
-          : 'Nao foi possivel acessar o perfil.',
+          : 'Não foi possível acessar o perfil.',
       );
     } finally {
       setIsSubmitting(false);
@@ -96,7 +96,7 @@ export function DefineName() {
           <Form layout="vertical" requiredMark={false} onFinish={handleContinue}>
             <Flex vertical gap={16}>
               <Flex vertical gap={4}>
-                <Typography.Text type="secondary">Codigo da sala</Typography.Text>
+                <Typography.Text type="secondary">Código da sala</Typography.Text>
                 <Typography.Title level={2} style={{ margin: 0 }}>
                   {code.toUpperCase()}
                 </Typography.Title>

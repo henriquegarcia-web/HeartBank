@@ -1,4 +1,4 @@
-import i18n from 'i18next';
+﻿import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 export const resources = {
@@ -9,10 +9,10 @@ export const resources = {
         loading: 'Carregando',
       },
       navigation: {
-        home: 'Início',
+        home: 'InÃ­cio',
       },
       brand: {
-        name: 'Banco Coração',
+        name: 'Banco CoraÃ§Ã£o',
       },
       forms: {
         name: {
@@ -35,8 +35,8 @@ export const resources = {
         },
       },
       validation: {
-        required: 'Campo obrigatório',
-        invalidEmail: 'Informe um e-mail válido',
+        required: 'Campo obrigatÃ³rio',
+        invalidEmail: 'Informe um e-mail vÃ¡lido',
         invalidFullName: 'Informe nome e sobrenome',
         minPassword: 'A senha deve ter pelo menos 6 caracteres',
       },
@@ -44,15 +44,15 @@ export const resources = {
         home: {
           title: 'Boilerplate React pronto para evoluir',
           subtitle:
-            'Base com Ant Design, formulários tipados, internacionalização, Firebase e testes.',
+            'Base com Ant Design, formulÃ¡rios tipados, internacionalizaÃ§Ã£o, Firebase e testes.',
           cardTitle: 'Cadastro inicial',
           cardDescription:
-            'Exemplo funcional usando React Hook Form, Zod e componentes de formulário.',
+            'Exemplo funcional usando React Hook Form, Zod e componentes de formulÃ¡rio.',
         },
         notFound: {
-          title: 'Página não encontrada',
-          subtitle: 'A rota acessada não existe.',
-          action: 'Voltar para o início',
+          title: 'PÃ¡gina nÃ£o encontrada',
+          subtitle: 'A rota acessada nÃ£o existe.',
+          action: 'Voltar para o inÃ­cio',
         },
       },
     },
@@ -67,7 +67,7 @@ export const resources = {
         home: 'Home',
       },
       brand: {
-        name: 'Coração Bank',
+        name: 'CoraÃ§Ã£o Bank',
       },
       forms: {
         name: {

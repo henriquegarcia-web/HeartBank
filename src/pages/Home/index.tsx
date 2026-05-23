@@ -1,4 +1,4 @@
-import {
+﻿import {
   App,
   Button,
   Card,
@@ -61,7 +61,7 @@ export function Home() {
       message.error(
         error instanceof GameError
           ? error.message
-          : 'Nao foi possivel criar a sala.',
+          : 'Não foi possível criar a sala.',
       );
     } finally {
       setIsCreating(false);
@@ -84,7 +84,7 @@ export function Home() {
                 label="Nome da sala"
                 rules={[{ required: true, message: 'Informe o nome da sala.' }]}
               >
-                <Input size="large" placeholder="Mesa de sabado" />
+                <Input size="large" placeholder="Mesa de sábado" />
               </Form.Item>
               <Button
                 block
