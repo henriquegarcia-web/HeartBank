@@ -12,7 +12,7 @@ export const resources = {
         home: 'InÃ­cio',
       },
       brand: {
-        name: 'Banco CoraÃ§Ã£o',
+        name: 'Banco Coração',
       },
       forms: {
         name: {
@@ -44,7 +44,7 @@ export const resources = {
         home: {
           title: 'Boilerplate React pronto para evoluir',
           subtitle:
-            'Base com Ant Design, formulÃ¡rios tipados, internacionalizaÃ§Ã£o, Firebase e testes.',
+            'Base com Ant Design, formulÃ¡rios tipados, internacionalização, Firebase e testes.',
           cardTitle: 'Cadastro inicial',
           cardDescription:
             'Exemplo funcional usando React Hook Form, Zod e componentes de formulÃ¡rio.',
@@ -67,7 +67,7 @@ export const resources = {
         home: 'Home',
       },
       brand: {
-        name: 'CoraÃ§Ã£o Bank',
+        name: 'Coração Bank',
       },
       forms: {
         name: {
