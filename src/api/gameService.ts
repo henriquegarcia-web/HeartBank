@@ -40,16 +40,6 @@ type RoomListSnapshot = Array<
 
 type TransferTransaction = Omit<Transaction, 'created_at'>;
 
-type DebtPaymentContext = {
-  roomId: string;
-  executedByPlayerId: string;
-  playersById: Map<string, FirebaseRecord<Player>>;
-  playerBalances: Map<string, number>;
-  debtRemaining: Map<string, number>;
-  activeDebts: Array<FirebaseRecord<Debt>>;
-  updates: Record<string, unknown>;
-};
-
 export class GameError extends Error {
   constructor(message: string) {
     super(message);
@@ -453,6 +443,23 @@ const assertTitleAvailable = async (roomId: string, titleId: string) => {
   }
 };
 
+const assertNoActiveDebtForTitlePurchase = async (
+  roomId: string,
+  playerId: string,
+) => {
+  const debts = await listRecords<Debt>('debts');
+  const hasActiveDebt = debts.some(
+    (debt) =>
+      debt.room_id === roomId &&
+      debt.from_player_id === playerId &&
+      debt.remaining_amount > 0,
+  );
+
+  if (hasActiveDebt) {
+    throw new GameError('Quite suas dividas ativas antes de comprar titulos.');
+  }
+};
+
 const addDirectPlayerToBankPayment = ({
   updates,
   roomId,
@@ -516,56 +523,89 @@ const addDirectPlayerToPlayerPayment = ({
   });
 };
 
-const settleDebtsWithIncomingMoney = (
-  playerId: string,
-  amount: number,
-  context: DebtPaymentContext,
-) => {
-  let remainingIncoming = roundMoney(amount);
+const addFlexiblePlayerToBankPayment = ({
+  updates,
+  roomId,
+  player,
+  amount,
+  executedByPlayerId,
+  reason,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  player: FirebaseRecord<Player>;
+  amount: number;
+  executedByPlayerId: string;
+  reason: string;
+}) => {
+  const debitAmount = roundMoney(Math.min(player.balance, amount));
+  const pendingDebtAmount = roundMoney(amount - debitAmount);
 
-  for (const debt of context.activeDebts) {
-    if (debt.from_player_id !== playerId || remainingIncoming <= 0) {
-      continue;
-    }
+  updates[`players/${player.id}/balance`] = roundMoney(
+    player.balance - debitAmount,
+  );
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'PLAYER_TO_BANK',
+    amount: debitAmount,
+    from_player_id: player.id,
+    to_player_id: null,
+    executed_by_player_id: executedByPlayerId,
+    reason,
+  });
+  createPendingDebt({
+    roomId,
+    fromPlayerId: player.id,
+    toPlayerId: null,
+    amount: pendingDebtAmount,
+    reason,
+    updates,
+  });
+};
 
-    const currentDebtAmount = context.debtRemaining.get(debt.id) ?? 0;
+const addFlexiblePlayerToPlayerPayment = ({
+  updates,
+  roomId,
+  fromPlayer,
+  toPlayer,
+  amount,
+  executedByPlayerId,
+  reason,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  fromPlayer: FirebaseRecord<Player>;
+  toPlayer: FirebaseRecord<Player>;
+  amount: number;
+  executedByPlayerId: string;
+  reason: string;
+}) => {
+  const debitAmount = roundMoney(Math.min(fromPlayer.balance, amount));
+  const pendingDebtAmount = roundMoney(amount - debitAmount);
 
-    if (currentDebtAmount <= 0) {
-      continue;
-    }
-
-    const paymentAmount = roundMoney(
-      Math.min(remainingIncoming, currentDebtAmount),
-    );
-    const nextDebtAmount = roundMoney(currentDebtAmount - paymentAmount);
-
-    remainingIncoming = roundMoney(remainingIncoming - paymentAmount);
-    context.debtRemaining.set(debt.id, nextDebtAmount);
-    context.updates[`debts/${debt.id}/remaining_amount`] = nextDebtAmount;
-    context.updates[`debts/${debt.id}/updated_at`] = now();
-
-    addTransactionToUpdates(context.updates, {
-      room_id: context.roomId,
-      type: debt.to_player_id ? 'PLAYER_TO_PLAYER' : 'PLAYER_TO_BANK',
-      amount: paymentAmount,
-      from_player_id: playerId,
-      to_player_id: debt.to_player_id,
-      executed_by_player_id: context.executedByPlayerId,
-      reason: debt.reason,
-    });
-
-    if (debt.to_player_id) {
-      settleDebtsWithIncomingMoney(debt.to_player_id, paymentAmount, context);
-    }
-  }
-
-  if (remainingIncoming > 0) {
-    const currentBalance = context.playerBalances.get(playerId) ?? 0;
-    context.playerBalances.set(
-      playerId,
-      roundMoney(currentBalance + remainingIncoming),
-    );
-  }
+  updates[`players/${fromPlayer.id}/balance`] = roundMoney(
+    fromPlayer.balance - debitAmount,
+  );
+  updates[`players/${toPlayer.id}/balance`] = roundMoney(
+    toPlayer.balance + debitAmount,
+  );
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'PLAYER_TO_PLAYER',
+    amount: debitAmount,
+    from_player_id: fromPlayer.id,
+    to_player_id: toPlayer.id,
+    executed_by_player_id: executedByPlayerId,
+    reason,
+  });
+  createPendingDebt({
+    roomId,
+    fromPlayerId: fromPlayer.id,
+    toPlayerId: toPlayer.id,
+    amount: pendingDebtAmount,
+    reason,
+    updates,
+  });
 };
 
 const createPendingDebt = ({
@@ -661,38 +701,14 @@ export const moveMoney = async ({
     assertCanDebit(fromPlayer, normalizedAmount);
   }
 
-  const [roomPlayers, roomDebts] = await Promise.all([
-    listRecords<Player>('players'),
-    listRecords<Debt>('debts'),
-  ]);
-  const playersById = new Map(
+  const roomPlayers = await listRecords<Player>('players');
+  const playerBalances = new Map(
     roomPlayers
       .filter((player) => player.room_id === roomId)
-      .map((player) => [player.id, player]),
-  );
-  const playerBalances = new Map(
-    Array.from(playersById.values()).map((player) => [
-      player.id,
-      roundMoney(player.balance),
-    ]),
-  );
-  const activeDebts = roomDebts
-    .filter((debt) => debt.room_id === roomId && debt.remaining_amount > 0)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at));
-  const debtRemaining = new Map(
-    activeDebts.map((debt) => [debt.id, roundMoney(debt.remaining_amount)]),
+      .map((player) => [player.id, roundMoney(player.balance)]),
   );
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
-  };
-  const context: DebtPaymentContext = {
-    roomId,
-    executedByPlayerId,
-    playersById,
-    playerBalances,
-    debtRemaining,
-    activeDebts,
-    updates,
   };
   const normalizedReason = reason?.trim() || null;
 
@@ -714,7 +730,8 @@ export const moveMoney = async ({
     });
 
     if (toPlayer && debitAmount > 0) {
-      settleDebtsWithIncomingMoney(toPlayer.id, debitAmount, context);
+      const currentToBalance = playerBalances.get(toPlayer.id) ?? 0;
+      playerBalances.set(toPlayer.id, roundMoney(currentToBalance + debitAmount));
     }
 
     createPendingDebt({
@@ -726,6 +743,8 @@ export const moveMoney = async ({
       updates,
     });
   } else if (toPlayer) {
+    const currentToBalance = playerBalances.get(toPlayer.id) ?? 0;
+
     addTransactionToUpdates(updates, {
       room_id: roomId,
       type,
@@ -736,11 +755,77 @@ export const moveMoney = async ({
       reason: normalizedReason,
     });
 
-    settleDebtsWithIncomingMoney(toPlayer.id, normalizedAmount, context);
+    playerBalances.set(toPlayer.id, roundMoney(currentToBalance + normalizedAmount));
   }
 
   playerBalances.forEach((balance, id) => {
     updates[`players/${id}/balance`] = roundMoney(balance);
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const payDebt = async ({
+  roomId,
+  debtId,
+  executedByPlayerId,
+}: {
+  roomId: string;
+  debtId: string;
+  executedByPlayerId: string;
+}) => {
+  const debtSnapshot = await get(ref(realtimeDatabase, `debts/${debtId}`));
+
+  if (!debtSnapshot.exists()) {
+    throw new GameError('Divida nao encontrada.');
+  }
+
+  const debt = {
+    id: debtId,
+    ...(debtSnapshot.val() as Debt),
+  };
+
+  if (debt.room_id !== roomId || debt.remaining_amount <= 0) {
+    throw new GameError('Divida invalida para esta sala.');
+  }
+
+  if (debt.from_player_id !== executedByPlayerId) {
+    throw new GameError('Apenas o devedor pode pagar esta divida.');
+  }
+
+  const debtor = await getPlayer(debt.from_player_id);
+  const creditor = debt.to_player_id ? await getPlayer(debt.to_player_id) : null;
+  const amount = roundMoney(debt.remaining_amount);
+
+  assertPlayerInRoom(debtor, roomId);
+
+  if (creditor) {
+    assertPlayerInRoom(creditor, roomId);
+  }
+
+  assertCanDebit(debtor, amount);
+
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${debtor.id}/balance`]: roundMoney(debtor.balance - amount),
+    [`debts/${debt.id}/remaining_amount`]: 0,
+    [`debts/${debt.id}/updated_at`]: now(),
+  };
+
+  if (creditor) {
+    updates[`players/${creditor.id}/balance`] = roundMoney(
+      creditor.balance + amount,
+    );
+  }
+
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: creditor ? 'PLAYER_TO_PLAYER' : 'PLAYER_TO_BANK',
+    amount,
+    from_player_id: debtor.id,
+    to_player_id: creditor?.id ?? null,
+    executed_by_player_id: executedByPlayerId,
+    reason: debt.reason ?? 'Pagamento de divida',
   });
 
   await update(ref(realtimeDatabase), updates);
@@ -756,21 +841,7 @@ export const createBankLoan = async ({
   const player = await getPlayer(playerId);
   assertPlayerInRoom(player, roomId);
 
-  const [debts, purchasedTitles] = await Promise.all([
-    listRecords<Debt>('debts'),
-    listRecords<PurchasedTitle>('purchased_titles'),
-  ]);
-  const hasActiveDebt = debts.some(
-    (debt) =>
-      debt.room_id === roomId &&
-      debt.from_player_id === playerId &&
-      debt.remaining_amount > 0,
-  );
-
-  if (hasActiveDebt) {
-    throw new GameError('Quite suas dividas ativas antes de pedir ao banco.');
-  }
-
+  const purchasedTitles = await listRecords<PurchasedTitle>('purchased_titles');
   const assetValue = purchasedTitles
     .filter(
       (title) => title.room_id === roomId && title.owner_player_id === playerId,
@@ -873,6 +944,7 @@ export const requestTitlePurchase = async ({
   const player = await getPlayer(playerId);
   assertPlayerInRoom(player, roomId);
   assertCanDebit(player, definition.purchase_price);
+  await assertNoActiveDebtForTitlePurchase(roomId, playerId);
   await assertTitleAvailable(roomId, titleId);
 
   const createdRequest = createPendingRequestUpdate({
@@ -934,7 +1006,7 @@ export const upgradePurchasedTitle = async ({
       throw new GameError('Este terreno nao pode receber mais casas.');
     }
 
-    addDirectPlayerToBankPayment({
+    addFlexiblePlayerToBankPayment({
       updates,
       roomId,
       player,
@@ -949,7 +1021,7 @@ export const upgradePurchasedTitle = async ({
       throw new GameError('O hotel so pode ser comprado depois de 4 casas.');
     }
 
-    addDirectPlayerToBankPayment({
+    addFlexiblePlayerToBankPayment({
       updates,
       roomId,
       player,
@@ -1182,6 +1254,7 @@ export const acceptPendingRequest = async ({
     }
 
     assertPlayerInRoom(buyer, request.room_id);
+    await assertNoActiveDebtForTitlePurchase(request.room_id, buyer.id);
     await assertTitleAvailable(request.room_id, request.title_id);
     addDirectPlayerToBankPayment({
       updates,
@@ -1213,7 +1286,7 @@ export const acceptPendingRequest = async ({
 
     assertPlayerInRoom(borrower, request.room_id);
     assertPlayerInRoom(creditor, request.room_id);
-    addDirectPlayerToPlayerPayment({
+    addFlexiblePlayerToPlayerPayment({
       updates,
       roomId: request.room_id,
       fromPlayer: creditor,

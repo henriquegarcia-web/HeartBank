@@ -3,14 +3,13 @@ import {
   Button,
   Card,
   Col,
+  Empty,
   Flex,
   Form,
   Input,
   Row,
-  Table,
   Typography,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -32,14 +31,6 @@ type RoomListItem = FirebaseRecord<Room> & {
 type CreateRoomFormValues = {
   roomName?: string;
 };
-
-const formatDateTime = (value?: string | null) =>
-  value
-    ? new Intl.DateTimeFormat('pt-BR', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-      }).format(new Date(value))
-    : 'Ainda nao jogada';
 
 export function Home() {
   const { message } = App.useApp();
@@ -77,50 +68,6 @@ export function Home() {
     }
   };
 
-  const roomColumns: ColumnsType<RoomListItem> = [
-    {
-      title: 'Sala',
-      dataIndex: 'name',
-      render: (name: string, room) => (
-        <Flex vertical gap={2}>
-          <Typography.Text strong>{name}</Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Codigo {room.code}
-          </Typography.Text>
-        </Flex>
-      ),
-    },
-    {
-      title: 'Criada em',
-      dataIndex: 'created_at',
-      responsive: ['md'],
-      render: (value: string) => formatDateTime(value),
-    },
-    {
-      title: 'Ultimo dia jogado',
-      dataIndex: 'last_played_at',
-      responsive: ['lg'],
-      render: (value: string | null) => formatDateTime(value),
-    },
-    {
-      title: 'Jogadores',
-      dataIndex: 'player_count',
-      align: 'center',
-      width: 110,
-    },
-    {
-      title: '',
-      key: 'actions',
-      align: 'right',
-      width: 110,
-      render: (_, room) => (
-        <Button onClick={() => navigate(`/sala/${room.code}/nome`)}>
-          Entrar
-        </Button>
-      ),
-    },
-  ];
-
   return (
     <AppLayout>
       <Row gutter={[16, 16]} justify="center">
@@ -153,14 +100,34 @@ export function Home() {
         </Col>
 
         <Col xs={24} lg={16}>
-          <Card title="Salas criadas">
-            <Table
-              rowKey="id"
-              columns={roomColumns}
-              dataSource={rooms}
-              loading={isLoadingRooms}
-              pagination={false}
-            />
+          <Card title="Salas criadas" loading={isLoadingRooms}>
+            {rooms.length > 0 ? (
+              <Flex vertical gap={8}>
+                {rooms.map((room) => (
+                  <Flex
+                    key={room.id}
+                    align="center"
+                    justify="space-between"
+                    gap={16}
+                    wrap="wrap"
+                    style={{
+                      border: '1px solid #f0f0f0',
+                      borderRadius: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <Typography.Text strong>
+                      {room.name} - {room.player_count} jogadores
+                    </Typography.Text>
+                    <Button onClick={() => navigate(`/sala/${room.code}/nome`)}>
+                      Entrar
+                    </Button>
+                  </Flex>
+                ))}
+              </Flex>
+            ) : (
+              <Empty description="Nenhuma sala criada" />
+            )}
           </Card>
         </Col>
       </Row>

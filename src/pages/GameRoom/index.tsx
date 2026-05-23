@@ -44,6 +44,7 @@ import {
   enterRoomByCode,
   GameError,
   moveMoney,
+  payDebt,
   requestTitlePurchase,
   subscribeRoomSnapshot,
   upgradePurchasedTitle,
@@ -113,6 +114,8 @@ type TitleActionModal = {
   purchasedTitle: FirebaseRecord<PurchasedTitle>;
 } | null;
 
+type DebtPaymentModal = FirebaseRecord<Debt> | null;
+
 const QUICK_AMOUNTS = [20, 50, 100, 500, 1000];
 
 const BANK_PAYMENT_REASON_OPTIONS = ['Noticia', 'Imposto', 'Fianca'].map(
@@ -158,6 +161,7 @@ const CALCULATOR_KEYS = [
   '=',
   '+',
 ];
+const PIX_AUDIO_SRC = '/audio_pix.mp3';
 
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
@@ -189,6 +193,15 @@ const normalizeSearchText = (value: string) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
+const playPixAudio = () => {
+  const audio = new Audio(PIX_AUDIO_SRC);
+  audio.volume = 0.8;
+
+  void audio.play().catch(() => {
+    // Browsers can block audio before the user interacts with the page.
+  });
+};
+
 function QuickAmountButtons({ form }: { form: FormInstance<MoneyFormValues> }) {
   const addAmount = (amount: number) => {
     const currentAmount = Number(form.getFieldValue('amount') ?? 0);
@@ -196,7 +209,12 @@ function QuickAmountButtons({ form }: { form: FormInstance<MoneyFormValues> }) {
   };
 
   return (
-    <Flex gap={8} wrap="wrap" style={{ marginTop: -12, marginBottom: 16 }}>
+    <Flex
+      gap={8}
+      wrap="wrap"
+      justify="end"
+      style={{ marginTop: -12, marginBottom: 16 }}
+    >
       {QUICK_AMOUNTS.map((amount) => (
         <Button key={amount} size="small" onClick={() => addAmount(amount)}>
           +{amount}
@@ -249,7 +267,7 @@ function TransactionHistoryList({
             >
               {signal} {formatCurrency(transaction.amount)}
             </Typography.Text>{' '}
-            | {getPlayerName(players, transaction.from_player_id)} {'->'}{' '}
+            | {getPlayerName(players, transaction.from_player_id)} {'→'}{' '}
             {getPlayerName(players, transaction.to_player_id)} |{' '}
             {transaction.reason || 'Sem motivo'}
           </Typography.Text>
@@ -385,10 +403,12 @@ export function GameRoom() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [titleActionModal, setTitleActionModal] =
     useState<TitleActionModal>(null);
+  const [debtPaymentModal, setDebtPaymentModal] =
+    useState<DebtPaymentModal>(null);
+  const [selectedTitleId, setSelectedTitleId] = useState<string>();
+  const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
   const seenTransactionIdsRef = useRef<Set<string>>(new Set());
   const didInitializeNotificationsRef = useRef(false);
-  const selectedTitleId = Form.useWatch('titleId', titlePurchaseForm);
-  const selectedDiceCount = Form.useWatch('diceCount', chargeForm);
 
   useEffect(() => {
     if (!code || !playerId) {
@@ -453,6 +473,8 @@ export function GameRoom() {
     );
 
     newReceivedPixTransactions.forEach((transaction) => {
+      playPixAudio();
+
       notification.success({
         message: 'Pagamento recebido',
         description: `${getPlayerName(
@@ -637,6 +659,9 @@ export function GameRoom() {
       chargeForm.resetFields();
       saleForm.resetFields();
       setTitleActionModal(null);
+      setDebtPaymentModal(null);
+      setSelectedTitleId(undefined);
+      setSelectedDiceCount(undefined);
     } catch (error) {
       message.error(
         error instanceof GameError
@@ -701,15 +726,25 @@ export function GameRoom() {
     }
   };
 
-  const handleCreateBankLoan = () =>
-    executeAction(
-      () =>
-        createBankLoan({
-          roomId: currentPlayer?.room_id ?? '',
-          playerId,
-        }),
-      'Emprestimo bancario registrado.',
-    );
+  const handleCreateBankLoan = () => {
+    modal.confirm({
+      title: 'Confirmar emprestimo bancario?',
+      content: `O banco vai liberar ${formatCurrency(
+        bankLoanAmount,
+      )} e criar uma divida ativa no mesmo valor.`,
+      okText: 'Confirmar',
+      cancelText: 'Cancelar',
+      onOk: () =>
+        executeAction(
+          () =>
+            createBankLoan({
+              roomId: currentPlayer?.room_id ?? '',
+              playerId,
+            }),
+          'Emprestimo bancario registrado.',
+        ),
+    });
+  };
 
   const handleCreatePlayerLoanRequest = (values: PlayerLoanFormValues) =>
     executeAction(
@@ -737,6 +772,11 @@ export function GameRoom() {
       return;
     }
 
+    if (currentPlayerDebtTotal > 0) {
+      message.error('Quite suas dividas ativas antes de comprar titulos.');
+      return;
+    }
+
     void executeAction(
       () =>
         requestTitlePurchase({
@@ -751,17 +791,54 @@ export function GameRoom() {
   const handleUpgradeTitle = (
     purchasedTitleId: string,
     upgrade: 'HOUSE' | 'HOTEL',
-  ) =>
-    executeAction(
-      () =>
-        upgradePurchasedTitle({
-          roomId: currentPlayer?.room_id ?? '',
-          playerId,
-          purchasedTitleId,
-          upgrade,
-        }),
-      upgrade === 'HOUSE' ? 'Casa comprada.' : 'Hotel comprado.',
+  ) => {
+    const purchasedTitle = currentPlayerTitles.find(
+      (title) => title.id === purchasedTitleId,
     );
+    const definition = getTitleDefinition(purchasedTitle?.title_id ?? null);
+    const amount =
+      definition?.kind === 'LAND'
+        ? upgrade === 'HOUSE'
+          ? definition.acquisition.house_price
+          : definition.acquisition.hotel_price
+        : 0;
+
+    modal.confirm({
+      title: upgrade === 'HOUSE' ? 'Comprar casa?' : 'Comprar hotel?',
+      content: `Confirmar compra de ${formatCurrency(
+        amount,
+      )}? Se o saldo nao cobrir tudo, o restante vira divida.`,
+      okText: 'Confirmar',
+      cancelText: 'Cancelar',
+      onOk: () =>
+        executeAction(
+          () =>
+            upgradePurchasedTitle({
+              roomId: currentPlayer?.room_id ?? '',
+              playerId,
+              purchasedTitleId,
+              upgrade,
+            }),
+          upgrade === 'HOUSE' ? 'Casa comprada.' : 'Hotel comprado.',
+        ),
+    });
+  };
+
+  const handlePayDebt = () => {
+    if (!debtPaymentModal) {
+      return;
+    }
+
+    void executeAction(
+      () =>
+        payDebt({
+          roomId: currentPlayer?.room_id ?? '',
+          debtId: debtPaymentModal.id,
+          executedByPlayerId: playerId,
+        }),
+      'Divida paga.',
+    );
+  };
 
   const handleCreateCharge = async () => {
     if (!titleActionModal) {
@@ -888,7 +965,7 @@ export function GameRoom() {
 
   const rankingItems = rankedPlayers.map((player) => ({
     title: player.name.toUpperCase(),
-    description: (
+    content: (
       <Space wrap>
         <Typography.Text
           style={{ display: 'flex', alignItems: 'center', gap: 5 }}
@@ -908,13 +985,13 @@ export function GameRoom() {
 
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
-      title: 'Quem deve',
+      title: 'Devedor',
       dataIndex: 'from_player_id',
       render: (fromPlayerId: string) =>
         getPlayerName(state?.players ?? [], fromPlayerId),
     },
     {
-      title: 'Para quem',
+      title: 'Credor',
       dataIndex: 'to_player_id',
       render: (toPlayerId: string | null) =>
         getPlayerName(state?.players ?? [], toPlayerId),
@@ -936,19 +1013,31 @@ export function GameRoom() {
       ),
     },
   ];
-  const personalDebtColumns = debtColumns.filter(
-    (column) =>
-      !('dataIndex' in column) || column.dataIndex !== 'from_player_id',
-  );
+  const personalDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
+    ...debtColumns.filter(
+      (column) =>
+        !('dataIndex' in column) || column.dataIndex !== 'from_player_id',
+    ),
+    {
+      title: '',
+      key: 'payDebt',
+      align: 'right',
+      render: (_, debt) => (
+        <Button size="small" onClick={() => setDebtPaymentModal(debt)}>
+          Pagar
+        </Button>
+      ),
+    },
+  ];
   const personalReceivableColumns = debtColumns.filter(
     (column) => !('dataIndex' in column) || column.dataIndex !== 'to_player_id',
   );
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
-      title: 'Devedor -> Credor',
+      title: 'Devedor → Credor',
       key: 'debtRelation',
       render: (_, debt) =>
-        `${getPlayerName(state?.players ?? [], debt.from_player_id)} -> ${getPlayerName(
+        `${getPlayerName(state?.players ?? [], debt.from_player_id)} → ${getPlayerName(
           state?.players ?? [],
           debt.to_player_id,
         )}`,
@@ -1107,6 +1196,7 @@ export function GameRoom() {
                   icon={<LuDices />}
                   onClick={() => {
                     chargeForm.resetFields();
+                    setSelectedDiceCount(undefined);
                     setTitleActionModal({
                       kind: 'STOCK',
                       purchasedTitle: title,
@@ -1201,6 +1291,7 @@ export function GameRoom() {
               <Button
                 onClick={() => {
                   chargeForm.resetFields();
+                  setSelectedDiceCount(undefined);
                   setTitleActionModal({ kind: 'RENT', purchasedTitle: title });
                 }}
               >
@@ -1370,16 +1461,8 @@ export function GameRoom() {
                             {formatCurrency(bankLoanAmount)}
                           </Descriptions.Item>
                         </Descriptions>
-                        {currentPlayerDebtTotal > 0 ? (
-                          <Alert
-                            type="warning"
-                            showIcon
-                            message="Quite suas dividas ativas antes de pedir ao banco."
-                          />
-                        ) : null}
                         <Button
                           type="primary"
-                          disabled={currentPlayerDebtTotal > 0}
                           loading={isSubmitting}
                           onClick={() => void handleCreateBankLoan()}
                         >
@@ -1483,6 +1566,7 @@ export function GameRoom() {
                               optionFilterProp="searchText"
                               options={availableTitleOptions}
                               placeholder="Buscar por nome do titulo"
+                              onChange={(value) => setSelectedTitleId(value)}
                               filterOption={(input, option) =>
                                 String(option?.searchText ?? '').includes(
                                   normalizeSearchText(input),
@@ -1493,20 +1577,23 @@ export function GameRoom() {
                           {selectedTitle ? (
                             <Alert
                               type={
-                                (currentPlayer?.balance ?? 0) >=
-                                selectedTitle.purchase_price
-                                  ? 'info'
-                                  : 'error'
+                                currentPlayerDebtTotal > 0 ||
+                                (currentPlayer?.balance ?? 0) <
+                                  selectedTitle.purchase_price
+                                  ? 'error'
+                                  : 'info'
                               }
                               showIcon
-                              message={`${selectedTitle.name} - ${formatCurrency(
+                              title={`${selectedTitle.name} - ${formatCurrency(
                                 selectedTitle.purchase_price,
                               )}`}
                               description={
-                                (currentPlayer?.balance ?? 0) >=
-                                selectedTitle.purchase_price
-                                  ? 'A compra cria uma confirmacao persistente antes do registro.'
-                                  : 'Saldo insuficiente.'
+                                currentPlayerDebtTotal > 0
+                                  ? 'Quite suas dividas ativas antes de comprar titulos.'
+                                  : (currentPlayer?.balance ?? 0) >=
+                                      selectedTitle.purchase_price
+                                    ? 'A compra cria uma confirmacao persistente antes do registro.'
+                                    : 'Saldo insuficiente.'
                               }
                               style={{ marginBottom: 16 }}
                             />
@@ -1515,6 +1602,7 @@ export function GameRoom() {
                             <Button
                               type="primary"
                               htmlType="submit"
+                              disabled={currentPlayerDebtTotal > 0}
                               loading={isSubmitting}
                             >
                               Comprar titulo
@@ -1717,7 +1805,7 @@ export function GameRoom() {
       <Modal
         open={Boolean(activePendingRequest)}
         title={getPendingRequestTitle()}
-        maskClosable={false}
+        mask={{ closable: false }}
         keyboard={false}
         closable={false}
         footer={
@@ -1751,6 +1839,56 @@ export function GameRoom() {
         }
       >
         {renderPendingRequestDescription()}
+      </Modal>
+
+      <Modal
+        open={Boolean(debtPaymentModal)}
+        title="Pagar divida?"
+        onCancel={() => setDebtPaymentModal(null)}
+        footer={
+          <Space>
+            <Button onClick={() => setDebtPaymentModal(null)}>Cancelar</Button>
+            <Button
+              type="primary"
+              loading={isSubmitting}
+              disabled={
+                Boolean(debtPaymentModal) &&
+                (currentPlayer?.balance ?? 0) <
+                  (debtPaymentModal?.remaining_amount ?? 0)
+              }
+              onClick={handlePayDebt}
+            >
+              Confirmar pagamento
+            </Button>
+          </Space>
+        }
+      >
+        {debtPaymentModal ? (
+          <Flex vertical gap={12}>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="Credor">
+                {getPlayerName(
+                  state?.players ?? [],
+                  debtPaymentModal.to_player_id,
+                )}
+              </Descriptions.Item>
+              <Descriptions.Item label="Motivo">
+                {debtPaymentModal.reason || 'Sem motivo'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Valor total">
+                {formatCurrency(debtPaymentModal.remaining_amount)}
+              </Descriptions.Item>
+            </Descriptions>
+            {(currentPlayer?.balance ?? 0) <
+            debtPaymentModal.remaining_amount ? (
+              <Alert
+                type="error"
+                showIcon
+                title="Saldo insuficiente para pagar a divida inteira."
+              />
+            ) : null}
+          </Flex>
+        ) : null}
       </Modal>
 
       <Modal
@@ -1840,6 +1978,7 @@ export function GameRoom() {
                   <Select
                     options={DICE_OPTIONS}
                     placeholder="Selecione de 1 a 12"
+                    onChange={(value) => setSelectedDiceCount(value)}
                   />
                 </Form.Item>
                 <Form.Item label="Valor a cobrar">
@@ -1855,7 +1994,7 @@ export function GameRoom() {
               <Alert
                 type="info"
                 showIcon
-                message={`Valor do aluguel: ${formatCurrency(
+                title={`Valor do aluguel: ${formatCurrency(
                   getLandChargeAmount(titleActionModal.purchasedTitle),
                 )}`}
               />
