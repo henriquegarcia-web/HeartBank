@@ -9,6 +9,12 @@ export const antdTheme: ThemeConfig = {
     fontFamily:
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
+  components: {
+    Card: {
+      colorTextHeading: '#ffffff',
+      headerBg: '#ee5f94',
+    },
+  },
 };
 
 export const styledTheme = {

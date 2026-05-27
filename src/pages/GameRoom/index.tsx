@@ -5,6 +5,7 @@
   Card,
   Col,
   Descriptions,
+  Divider,
   Empty,
   Flex,
   Form,
@@ -38,6 +39,7 @@ import {
   LuMedal,
   LuLandmark,
   LuScrollText,
+  LuSkull,
   LuTrophy,
   LuWallet,
 } from 'react-icons/lu';
@@ -60,6 +62,7 @@ import {
   payJailBail,
   releasePlayerBail,
   requestTitlePurchase,
+  resignPlayer,
   setPlayerJailStatus,
   subscribeRoomSnapshot,
   upgradePurchasedTitle,
@@ -863,6 +866,29 @@ export function GameRoom() {
     });
   };
 
+  const handleResignPlayer = (targetPlayer: FirebaseRecord<Player>) => {
+    if (!currentPlayer) {
+      return;
+    }
+
+    modal.confirm({
+      title: 'Confirmar desistência?',
+      content: `${targetPlayer.name} será removido do banco e seus títulos voltarão a ficar disponíveis para todos.`,
+      okText: 'Confirmar desistência',
+      cancelText: 'Cancelar',
+      okButtonProps: { danger: true },
+      onOk: () =>
+        executeAction(
+          () =>
+            resignPlayer({
+              roomId: currentPlayer.room_id,
+              targetPlayerId: targetPlayer.id,
+              executedByPlayerId: currentPlayer.id,
+            }),
+          'Jogador removido e títulos liberados.',
+        ),
+    });
+  };
   const handleReleaseBail = (targetPlayer: FirebaseRecord<Player>) => {
     if (!currentPlayer) {
       return;
@@ -1251,7 +1277,7 @@ export function GameRoom() {
   ];
   const jailColumns: ColumnsType<FirebaseRecord<Player>> = [
     {
-      title: 'Jogador',
+      title: 'Ações',
       key: 'player',
       render: (_, player) => (
         <Space>
@@ -1261,8 +1287,8 @@ export function GameRoom() {
       ),
     },
     {
-      title: 'Ações',
-      key: 'actions',
+      title: 'Prisão',
+      key: 'jail',
       align: 'right',
       render: (_, player) => (
         <Space>
@@ -1283,6 +1309,20 @@ export function GameRoom() {
             />
           ) : null}
         </Space>
+      ),
+    },
+    {
+      title: 'Desistir',
+      key: 'resign',
+      align: 'right',
+      render: (_, player) => (
+        <Button
+          aria-label="Aplicar desistência"
+          danger
+          disabled={player.id === currentPlayer?.id}
+          icon={<LuSkull />}
+          onClick={() => handleResignPlayer(player)}
+        />
       ),
     },
   ];
@@ -1377,6 +1417,13 @@ export function GameRoom() {
       return null;
     }
 
+    const titleCardHeaderColor =
+      definition.kind === 'STOCK' ? '#30343b' : definition.color;
+    const titleCardStyles = {
+      header: {
+        background: titleCardHeaderColor,
+      },
+    };
     const cardTitle = (
       <Flex justify="space-between" gap={12} align="center">
         <Space>
@@ -1385,11 +1432,13 @@ export function GameRoom() {
               width: 12,
               height: 12,
               borderRadius: 999,
-              background: definition.color,
+              background: '#fff',
               display: 'inline-block',
             }}
           />
-          <Typography.Text strong>{definition.name}</Typography.Text>
+          <Typography.Text strong style={{ color: '#fff' }}>
+            {definition.name}
+          </Typography.Text>
         </Space>
         <Tag>{definition.kind === 'LAND' ? 'Terreno' : 'Ação'}</Tag>
       </Flex>
@@ -1398,7 +1447,7 @@ export function GameRoom() {
     if (definition.kind === 'STOCK') {
       return (
         <Col xs={24} lg={12} key={title.id}>
-          <Card title={cardTitle}>
+          <Card title={cardTitle} styles={titleCardStyles}>
             <Flex vertical gap={12}>
               <img
                 alt={definition.name}
@@ -1455,7 +1504,7 @@ export function GameRoom() {
 
     return (
       <Col xs={24} lg={12} key={title.id}>
-        <Card title={cardTitle}>
+        <Card title={cardTitle} styles={titleCardStyles}>
           <Flex vertical gap={12}>
             <Space wrap>
               {title.has_hotel ? (
@@ -1483,6 +1532,9 @@ export function GameRoom() {
               <Descriptions.Item label="Comprar hotel">
                 {formatCurrency(definition.acquisition.hotel_price)}
               </Descriptions.Item>
+            </Descriptions>
+            <Divider style={{ margin: '4px 0' }} />
+            <Descriptions column={1} size="small">
               <Descriptions.Item label="Aluguel">
                 {formatCurrency(definition.receivables.rent)}
               </Descriptions.Item>

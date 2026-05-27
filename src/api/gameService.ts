@@ -63,7 +63,9 @@ const generateRoomCode = () =>
     'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'.charAt(Math.floor(Math.random() * 32)),
   ).join('');
 
-const withPlayerDefaults = <T extends FirebaseRecord<Player>>(player: T): T => ({
+const withPlayerDefaults = <T extends FirebaseRecord<Player>>(
+  player: T,
+): T => ({
   ...player,
   is_jailed: player.is_jailed ?? false,
   is_bail_available: player.is_bail_available ?? false,
@@ -137,6 +139,58 @@ export const deleteRoom = async (
     !executedByPlayer.is_banker
   ) {
     throw new GameError('Apenas o criador da sala pode excluir a sala.');
+  }
+
+  const [players, transactions, debts, purchasedTitles, pendingRequests] =
+    await Promise.all([
+      listRecords<Player>('players'),
+      listRecords<Transaction>('transactions'),
+      listRecords<Debt>('debts'),
+      listRecords<PurchasedTitle>('purchased_titles'),
+      listRecords<PendingRequest>('pending_requests'),
+    ]);
+  const updates: Record<string, null> = {
+    [`rooms/${roomId}`]: null,
+  };
+
+  players
+    .filter((player) => player.room_id === roomId)
+    .forEach((player) => {
+      updates[`players/${player.id}`] = null;
+    });
+
+  transactions
+    .filter((transaction) => transaction.room_id === roomId)
+    .forEach((transaction) => {
+      updates[`transactions/${transaction.id}`] = null;
+    });
+
+  debts
+    .filter((debt) => debt.room_id === roomId)
+    .forEach((debt) => {
+      updates[`debts/${debt.id}`] = null;
+    });
+
+  purchasedTitles
+    .filter((title) => title.room_id === roomId)
+    .forEach((title) => {
+      updates[`purchased_titles/${title.id}`] = null;
+    });
+
+  pendingRequests
+    .filter((request) => request.room_id === roomId)
+    .forEach((request) => {
+      updates[`pending_requests/${request.id}`] = null;
+    });
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const deleteRoomByMasterPassword = async (roomId: string) => {
+  const roomSnapshot = await get(ref(realtimeDatabase, `rooms/${roomId}`));
+
+  if (!roomSnapshot.exists()) {
+    throw new GameError('Sala não encontrada.');
   }
 
   const [players, transactions, debts, purchasedTitles, pendingRequests] =
@@ -744,7 +798,10 @@ export const moveMoney = async ({
 
     if (toPlayer && debitAmount > 0) {
       const currentToBalance = playerBalances.get(toPlayer.id) ?? 0;
-      playerBalances.set(toPlayer.id, roundMoney(currentToBalance + debitAmount));
+      playerBalances.set(
+        toPlayer.id,
+        roundMoney(currentToBalance + debitAmount),
+      );
     }
 
     createPendingDebt({
@@ -768,7 +825,10 @@ export const moveMoney = async ({
       reason: normalizedReason,
     });
 
-    playerBalances.set(toPlayer.id, roundMoney(currentToBalance + normalizedAmount));
+    playerBalances.set(
+      toPlayer.id,
+      roundMoney(currentToBalance + normalizedAmount),
+    );
   }
 
   playerBalances.forEach((balance, id) => {
@@ -805,6 +865,83 @@ export const setPlayerJailStatus = async ({
   });
 };
 
+export const resignPlayer = async ({
+  roomId,
+  targetPlayerId,
+  executedByPlayerId,
+}: {
+  roomId: string;
+  targetPlayerId: string;
+  executedByPlayerId: string;
+}) => {
+  const [executedByPlayer, targetPlayer] = await Promise.all([
+    getPlayer(executedByPlayerId),
+    getPlayer(targetPlayerId),
+  ]);
+
+  assertBanker(executedByPlayer);
+  assertPlayerInRoom(executedByPlayer, roomId);
+  assertPlayerInRoom(targetPlayer, roomId);
+
+  if (targetPlayer.id === executedByPlayer.id) {
+    throw new GameError('O banqueiro não pode remover a si mesmo.');
+  }
+
+  const [debts, purchasedTitles, pendingRequests] = await Promise.all([
+    listRecords<Debt>('debts'),
+    listRecords<PurchasedTitle>('purchased_titles'),
+    listRecords<PendingRequest>('pending_requests'),
+  ]);
+
+  const targetTitleIds = new Set(
+    purchasedTitles
+      .filter(
+        (title) =>
+          title.room_id === roomId && title.owner_player_id === targetPlayerId,
+      )
+      .map((title) => title.id),
+  );
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${targetPlayerId}`]: null,
+  };
+
+  purchasedTitles
+    .filter(
+      (title) =>
+        title.room_id === roomId && title.owner_player_id === targetPlayerId,
+    )
+    .forEach((title) => {
+      updates[`purchased_titles/${title.id}`] = null;
+    });
+
+  debts
+    .filter(
+      (debt) =>
+        debt.room_id === roomId &&
+        (debt.from_player_id === targetPlayerId ||
+          debt.to_player_id === targetPlayerId),
+    )
+    .forEach((debt) => {
+      updates[`debts/${debt.id}`] = null;
+    });
+
+  pendingRequests
+    .filter(
+      (request) =>
+        request.room_id === roomId &&
+        (request.requester_player_id === targetPlayerId ||
+          request.target_player_id === targetPlayerId ||
+          (request.purchased_title_id
+            ? targetTitleIds.has(request.purchased_title_id)
+            : false)),
+    )
+    .forEach((request) => {
+      updates[`pending_requests/${request.id}`] = null;
+    });
+
+  await update(ref(realtimeDatabase), updates);
+};
 export const releasePlayerBail = async ({
   roomId,
   targetPlayerId,
@@ -901,7 +1038,9 @@ export const payDebt = async ({
   }
 
   const debtor = await getPlayer(debt.from_player_id);
-  const creditor = debt.to_player_id ? await getPlayer(debt.to_player_id) : null;
+  const creditor = debt.to_player_id
+    ? await getPlayer(debt.to_player_id)
+    : null;
   const amount = roundMoney(debt.remaining_amount);
 
   assertPlayerInRoom(debtor, roomId);
@@ -1019,7 +1158,9 @@ export const createPlayerLoanRequest = async ({
   }
 
   if (repaymentAmount < requestedAmount) {
-    throw new GameError('O valor a pagar deve ser maior ou igual ao solicitado.');
+    throw new GameError(
+      'O valor a pagar deve ser maior ou igual ao solicitado.',
+    );
   }
 
   const [borrower, creditor] = await Promise.all([
@@ -1475,7 +1616,9 @@ export const declinePendingRequest = async ({
   }
 
   if (request.kind === 'RENT_CHARGE' || request.kind === 'STOCK_CHARGE') {
-    throw new GameError('Cobranças de aluguel e ação precisam ser confirmadas.');
+    throw new GameError(
+      'Cobranças de aluguel e ação precisam ser confirmadas.',
+    );
   }
 
   await update(ref(realtimeDatabase), {
@@ -1578,15 +1721,3 @@ export const subscribeRoomSnapshot = (
       pendingRequests,
     });
   });
-
-
-
-
-
-
-
-
-
-
-
-

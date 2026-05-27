@@ -8,6 +8,7 @@ import { Home } from './index';
 vi.mock('@/api/gameService', () => ({
   GameError: class GameError extends Error {},
   createRoom: vi.fn(),
+  deleteRoomByMasterPassword: vi.fn(),
   subscribeRoomsSnapshot: vi.fn((callback: (rooms: unknown[]) => void) => {
     callback([]);
 
@@ -20,7 +21,7 @@ describe('Home', () => {
     renderWithProviders(<Home />);
 
     expect(screen.getAllByText('Criar sala')).toHaveLength(2);
-    expect(screen.getByLabelText('Nome da sala')).toBeInTheDocument();
+    expect(screen.getByLabelText('Nome da Sala')).toBeInTheDocument();
     expect(screen.getByText('Salas criadas')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Criar sala' }),
