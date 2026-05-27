@@ -1,20 +1,15 @@
-import { Button, Layout, Typography } from 'antd';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { LuArrowLeft } from 'react-icons/lu';
-import { FaHeart } from 'react-icons/fa';
+import { Layout, Typography } from 'antd';
+import type { ReactNode } from 'react';
 
 import { Logo } from '../Logo';
-import { tokens } from '@/styles/tokens';
 
 type AppHeaderProps = {
+  leftAction?: ReactNode;
   title?: string;
+  rightAction?: ReactNode;
 };
 
-export function AppHeader({ title }: AppHeaderProps) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const canGoHome = location.pathname !== '/';
-
+export function AppHeader({ leftAction, title, rightAction }: AppHeaderProps) {
   return (
     <Layout.Header
       style={{
@@ -31,23 +26,15 @@ export function AppHeader({ title }: AppHeaderProps) {
         zIndex: 1001,
       }}
     >
-      {canGoHome ? (
-        <Button
-          aria-label="Voltar ao menu"
-          icon={<LuArrowLeft />}
-          onClick={() => navigate('/')}
-          style={{ left: 14, position: 'absolute' }}
-        />
+      {leftAction ? (
+        <div style={{ left: 14, position: 'absolute' }}>{leftAction}</div>
       ) : null}
       {title ? (
         <>
           <Typography.Text strong>{title}</Typography.Text>
-          <FaHeart
-            color={tokens.colors.primary}
-            aria-hidden
-            size={20}
-            style={{ position: 'absolute', right: 20 }}
-          />
+          {rightAction ? (
+            <div style={{ position: 'absolute', right: 14 }}>{rightAction}</div>
+          ) : null}
         </>
       ) : (
         <Logo />

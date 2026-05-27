@@ -25,6 +25,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
+  LuArrowLeft,
   LuCalculator,
   LuCircleDollarSign,
   LuDices,
@@ -33,6 +34,7 @@ import {
   LuHotel,
   LuLock,
   LuLockOpen,
+  LuLogOut,
   LuMedal,
   LuLandmark,
   LuScrollText,
@@ -585,6 +587,9 @@ export function GameRoom() {
   const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
   const canUseBankMenuWhileJailed =
     isCurrentPlayerJailed && (currentPlayer?.is_banker ?? false);
+  const shouldShowJailBackdrop =
+    isCurrentPlayerJailed &&
+    !(currentPlayer?.is_banker && activeTabKey === 'banker');
 
   useEffect(() => {
     if (activeTabKey === 'banker' && !currentPlayer?.is_banker) {
@@ -1148,7 +1153,6 @@ export function GameRoom() {
     { key: 'loans', label: 'Empréstimos', icon: <LuLandmark /> },
     { key: 'titles', label: 'Títulos', icon: <LuScrollText /> },
     { key: 'ranking', label: 'Ranking', icon: <LuTrophy /> },
-    { key: 'calculator', label: 'Calculadora', icon: <LuCalculator /> },
     { key: 'history', label: 'Histórico', icon: <LuHistory /> },
     ...(currentPlayer?.is_banker
       ? [
@@ -1160,9 +1164,14 @@ export function GameRoom() {
         ]
       : []),
   ];
+  const isNavigatorTab = navigationItems.some(
+    (item) => item.key === activeTabKey,
+  );
   const activeNavigationLabel =
-    navigationItems.find((item) => item.key === activeTabKey)?.label ??
-    'Principal';
+    activeTabKey === 'calculator'
+      ? 'Calculadora'
+      : (navigationItems.find((item) => item.key === activeTabKey)?.label ??
+        'Principal');
 
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
@@ -1552,7 +1561,34 @@ export function GameRoom() {
   };
 
   return (
-    <AppLayout headerTitle={activeNavigationLabel}>
+    <AppLayout
+      headerLeftAction={
+        isNavigatorTab ? (
+          <Button
+            aria-label="Sair"
+            icon={<LuLogOut />}
+            onClick={() => navigate('/')}
+          />
+        ) : (
+          <Button
+            aria-label="Voltar ao principal"
+            icon={<LuArrowLeft />}
+            onClick={() => setActiveTabKey('player')}
+          />
+        )
+      }
+      headerTitle={activeNavigationLabel}
+      headerRightAction={
+        isNavigatorTab ? (
+          <Button
+            aria-label="Abrir calculadora"
+            disabled={isCurrentPlayerJailed}
+            icon={<LuCalculator />}
+            onClick={() => setActiveTabKey('calculator')}
+          />
+        ) : null
+      }
+    >
       <Flex vertical gap={24} style={{ paddingBottom: 104 }}>
         <Tabs
           activeKey={activeTabKey}
@@ -2154,7 +2190,7 @@ export function GameRoom() {
         })}
       </nav>
 
-      {currentPlayer?.is_jailed ? (
+      {shouldShowJailBackdrop && currentPlayer ? (
         <Flex
           vertical
           align="center"
