@@ -337,21 +337,19 @@ function PlayerFinancialSummary({
   player,
   assetValue,
   debtTotal,
-  receivableTotal,
   debtStage,
   isLoading,
 }: {
   player: FirebaseRecord<Player> | null;
   assetValue: number;
   debtTotal: number;
-  receivableTotal: number;
   debtStage: DebtStage;
   isLoading: boolean;
 }) {
   return (
     <Card loading={isLoading}>
-      <Flex justify="space-between" gap={16} wrap="wrap">
-        <Flex vertical gap={4}>
+      <Flex align="flex-start" justify="space-between" gap={16}>
+        <Flex vertical gap={6} style={{ minWidth: 0 }}>
           <Typography.Title level={4} style={{ margin: 0 }}>
             {player?.name}
           </Typography.Title>
@@ -364,31 +362,25 @@ function PlayerFinancialSummary({
             ) : null}
           </Space>
         </Flex>
-        <Descriptions
-          column={{ xs: 1, sm: 2, md: 4 }}
-          size="small"
-          layout="vertical"
-          style={{ flex: 1, minWidth: 260 }}
-        >
-          <Descriptions.Item label="Saldo atual">
-            <Typography.Text strong>
+        <Flex vertical gap={4} align="flex-end" style={{ flexShrink: 0 }}>
+          <Flex vertical align="flex-end" gap={0}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Saldo atual
+            </Typography.Text>
+            <Typography.Text strong style={{ fontSize: 18, lineHeight: 1.2 }}>
               {formatCurrency(player?.balance ?? 0)}
             </Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="Patrimônio">
-            <Typography.Text strong>{formatCurrency(assetValue)}</Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="A receber">
-            <Typography.Text type="success" strong>
-              {formatCurrency(receivableTotal)}
-            </Typography.Text>
-          </Descriptions.Item>
-          <Descriptions.Item label="Dívidas">
-            <Typography.Text type={debtTotal > 0 ? 'danger' : undefined} strong>
-              {formatCurrency(debtTotal)}
-            </Typography.Text>
-          </Descriptions.Item>
-        </Descriptions>
+          </Flex>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            Patrimônio: {formatCurrency(assetValue)}
+          </Typography.Text>
+          <Typography.Text
+            type={debtTotal > 0 ? 'danger' : undefined}
+            style={{ fontSize: 12 }}
+          >
+            Dívidas: {formatCurrency(debtTotal)}
+          </Typography.Text>
+        </Flex>
       </Flex>
     </Card>
   );
@@ -935,14 +927,6 @@ export function GameRoom() {
     [currentPlayerDebts],
   );
 
-  const currentPlayerReceivableTotal = useMemo(
-    () =>
-      currentPlayerReceivables.reduce(
-        (total, debt) => total + debt.remaining_amount,
-        0,
-      ),
-    [currentPlayerReceivables],
-  );
   const currentDebtStage = getDebtStage(
     currentPlayerDebtTotal,
     currentPlayerAssetValue,
@@ -1534,6 +1518,23 @@ export function GameRoom() {
       : (navigationItems.find((item) => item.key === activeTabKey)?.label ??
         'Principal');
 
+  const renderDebtParty = (name: string, reason?: string | null) => (
+    <Flex vertical gap={2}>
+      <Typography.Text>{name}</Typography.Text>
+      <Typography.Text
+        type="secondary"
+        style={{
+          display: 'block',
+          fontSize: 10,
+          lineHeight: 1.35,
+          whiteSpace: 'normal',
+        }}
+      >
+        {reason || 'Sem motivo'}
+      </Typography.Text>
+    </Flex>
+  );
+
   const debtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
       title: 'Devedor',
@@ -1544,13 +1545,11 @@ export function GameRoom() {
     {
       title: 'Credor',
       dataIndex: 'to_player_id',
-      render: (toPlayerId: string | null) =>
-        getPlayerName(state?.players ?? [], toPlayerId),
-    },
-    {
-      title: 'Motivo',
-      dataIndex: 'reason',
-      render: (reason: string | null) => reason || 'Sem motivo',
+      render: (toPlayerId: string | null, debt) =>
+        renderDebtParty(
+          getPlayerName(state?.players ?? [], toPlayerId),
+          debt.reason,
+        ),
     },
     {
       title: 'Original',
@@ -1608,6 +1607,15 @@ export function GameRoom() {
                 </Typography.Text>
               ),
             }
+          : 'dataIndex' in column && column.dataIndex === 'from_player_id'
+            ? {
+                ...column,
+                render: (fromPlayerId: string, debt: FirebaseRecord<Debt>) =>
+                  renderDebtParty(
+                    getPlayerName(state?.players ?? [], fromPlayerId),
+                    debt.reason,
+                  ),
+              }
           : column,
       );
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
@@ -1615,15 +1623,13 @@ export function GameRoom() {
       title: 'Devedor / Credor',
       key: 'debtRelation',
       render: (_, debt) =>
-        `${getPlayerName(state?.players ?? [], debt.from_player_id)} → ${getPlayerName(
-          state?.players ?? [],
-          debt.to_player_id,
-        )}`,
-    },
-    {
-      title: 'Motivo',
-      dataIndex: 'reason',
-      render: (reason: string | null) => reason || 'Sem motivo',
+        renderDebtParty(
+          `${getPlayerName(
+            state?.players ?? [],
+            debt.from_player_id,
+          )} → ${getPlayerName(state?.players ?? [], debt.to_player_id)}`,
+          debt.reason,
+        ),
     },
     {
       title: 'Original',
@@ -2033,7 +2039,6 @@ export function GameRoom() {
                       player={currentPlayer}
                       assetValue={currentPlayerAssetValue}
                       debtTotal={currentPlayerDebtTotal}
-                      receivableTotal={currentPlayerReceivableTotal}
                       debtStage={currentDebtStage}
                       isLoading={isLoading}
                     />
@@ -2127,7 +2132,6 @@ export function GameRoom() {
                       player={currentPlayer}
                       assetValue={currentPlayerAssetValue}
                       debtTotal={currentPlayerDebtTotal}
-                      receivableTotal={currentPlayerReceivableTotal}
                       debtStage={currentDebtStage}
                       isLoading={isLoading}
                     />
@@ -2269,7 +2273,6 @@ export function GameRoom() {
                         player={currentPlayer}
                         assetValue={currentPlayerAssetValue}
                         debtTotal={currentPlayerDebtTotal}
-                        receivableTotal={currentPlayerReceivableTotal}
                         debtStage={currentDebtStage}
                         isLoading={isLoading}
                       />
