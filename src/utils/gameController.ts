@@ -2,6 +2,7 @@ import {
   BOARD_SIZE,
   INITIAL_ROUND_BONUS,
   JAIL_MAX_DICE_ATTEMPTS,
+  JAIL_POSITION,
   ROUND_BONUS_INCREMENT,
   ROUND_BONUS_INTERVAL,
   START_POSITION,
@@ -12,8 +13,12 @@ import type { FirebaseRecord } from '@/types/firebase';
 
 export type AdvanceResult = {
   fromPosition: number;
+  landedPosition: number;
+  landedSpace: BoardSpace;
   toPosition: number;
+  finalSpace: BoardSpace;
   passedStart: boolean;
+  sendsToJail: boolean;
   space: BoardSpace;
 };
 
@@ -66,19 +71,34 @@ export const advanceBoardPosition = (
   fromPosition: number,
   diceTotal: number,
 ): AdvanceResult => {
+  const parsedFromPosition = Number(fromPosition);
+  const parsedDiceTotal = Number(diceTotal);
   const normalizedFrom =
-    fromPosition >= START_POSITION && fromPosition <= BOARD_SIZE
-      ? fromPosition
+    Number.isInteger(parsedFromPosition) &&
+    parsedFromPosition >= START_POSITION &&
+    parsedFromPosition <= BOARD_SIZE
+      ? parsedFromPosition
       : START_POSITION;
-  const zeroBasedPosition = normalizedFrom - 1 + diceTotal;
-  const toPosition = (zeroBasedPosition % BOARD_SIZE) + 1;
-  const passedStart = zeroBasedPosition >= BOARD_SIZE;
+  const normalizedDiceTotal =
+    Number.isInteger(parsedDiceTotal) && parsedDiceTotal > 0
+      ? parsedDiceTotal
+      : 0;
+  const zeroBasedPosition = normalizedFrom - 1 + normalizedDiceTotal;
+  const landedPosition = (zeroBasedPosition % BOARD_SIZE) + 1;
+  const landedSpace = getBoardSpace(landedPosition);
+  const sendsToJail =
+    landedSpace.kind === 'GO_TO_JAIL' || landedSpace.kind === 'JAIL';
+  const toPosition = sendsToJail ? JAIL_POSITION : landedPosition;
 
   return {
     fromPosition: normalizedFrom,
+    landedPosition,
+    landedSpace,
     toPosition,
-    passedStart,
-    space: getBoardSpace(toPosition),
+    finalSpace: getBoardSpace(toPosition),
+    passedStart: zeroBasedPosition >= BOARD_SIZE,
+    sendsToJail,
+    space: landedSpace,
   };
 };
 

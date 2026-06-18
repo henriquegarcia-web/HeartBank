@@ -1292,47 +1292,48 @@ export const rollDiceForCurrentTurn = async ({
     });
   }
 
-  if (advance.space.kind === 'GO_TO_JAIL' || advance.space.kind === 'JAIL') {
-    toPosition = JAIL_POSITION;
-    nextGameState.positions_by_player_id[currentPlayer.id] = JAIL_POSITION;
+  if (advance.sendsToJail) {
     updates[`players/${currentPlayer.id}/is_jailed`] = true;
     updates[`players/${currentPlayer.id}/is_bail_available`] = false;
     updates[`players/${currentPlayer.id}/jail_attempts`] = 0;
-    message = advance.space.kind === 'JAIL' ? 'Caiu na prisão.' : 'Foi enviado para a prisão.';
-  } else if (advance.space.kind === 'TAX_REFUND') {
+    message =
+      advance.landedSpace.kind === 'JAIL'
+        ? 'Caiu na prisão.'
+        : 'Foi enviado para a prisão.';
+  } else if (advance.landedSpace.kind === 'TAX_REFUND') {
     createBankToPlayerCredit({
       updates,
       roomId,
       player: currentPlayer,
-      amount: advance.space.amount ?? 0,
+      amount: advance.landedSpace.amount ?? 0,
       executedByPlayerId,
       reason: 'Restituição do imposto de renda',
     });
     message = 'Recebeu restituição do imposto de renda.';
-  } else if (advance.space.kind === 'FEDERAL_TAX') {
+  } else if (advance.landedSpace.kind === 'FEDERAL_TAX') {
     addFlexiblePlayerToBankPayment({
       updates,
       roomId,
       player: currentPlayer,
-      amount: advance.space.amount ?? 0,
+      amount: advance.landedSpace.amount ?? 0,
       executedByPlayerId: currentPlayer.id,
       reason: 'Receita Federal',
     });
     message = 'Pagou a Receita Federal.';
-  } else if (advance.space.kind === 'NEWS') {
+  } else if (advance.landedSpace.kind === 'NEWS') {
     const card = getRandomNewsCard();
     const news = {
       player_id: currentPlayer.id,
       card,
-      space_index: advance.space.index,
+      space_index: advance.landedSpace.index,
     };
     nextGameState.pending_news = news;
     nextGameState.last_news = news;
     message = 'Notícia pendente de confirmação.';
-  } else if (advance.space.title_id) {
+  } else if (advance.landedSpace.title_id) {
     const purchasedTitle = purchasedTitles.find(
       (title) =>
-        title.room_id === roomId && title.title_id === advance.space.title_id,
+        title.room_id === roomId && title.title_id === advance.landedSpace.title_id,
     );
 
     if (purchasedTitle) {
@@ -1350,10 +1351,10 @@ export const rollDiceForCurrentTurn = async ({
     } else {
       message = 'Título disponível para compra.';
     }
-  } else if (advance.space.kind === 'HOLIDAY') {
+  } else if (advance.landedSpace.kind === 'HOLIDAY') {
     message = 'Feriado. Nada acontece.';
   } else {
-    message = message || `Caiu em ${advance.space.name}.`;
+    message = message || `Caiu em ${advance.landedSpace.name}.`;
   }
 
   const lastRoll: GameLastRoll = {

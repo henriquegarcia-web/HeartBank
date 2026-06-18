@@ -588,5 +588,16 @@ export const NEWS_CARDS: NewsCard[] = [
   },
 ];
 
-export const getBoardSpace = (position: number) =>
-  BOARD_SPACES.find((space) => space.index === position) ?? BOARD_SPACES[0];
+export const getBoardSpace = (position: number) => {
+  const normalizedPosition = Number(position);
+
+  if (
+    !Number.isInteger(normalizedPosition) ||
+    normalizedPosition < START_POSITION ||
+    normalizedPosition > BOARD_SIZE
+  ) {
+    return BOARD_SPACES[0];
+  }
+
+  return BOARD_SPACES[normalizedPosition - 1] ?? BOARD_SPACES[0];
+};
