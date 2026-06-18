@@ -30,6 +30,16 @@ describe('isBlockingDebtForTitlePurchase', () => {
     ).toBe(false);
   });
 
+  it('does not block old bank debts without a loan reason', () => {
+    expect(
+      isBlockingDebtForTitlePurchase(
+        { ...baseDebt, to_player_id: null, reason: null },
+        'room-1',
+        'player-1',
+      ),
+    ).toBe(false);
+  });
+
   it('does not block player loans', () => {
     expect(
       isBlockingDebtForTitlePurchase(

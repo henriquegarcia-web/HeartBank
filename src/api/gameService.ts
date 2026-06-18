@@ -2,7 +2,7 @@
 
 import { listRecords } from '@/api/firebaseDatabase';
 import {
-  BANK_LOAN_INTEREST_AMOUNT,
+  getBankLoanDebtAmount,
   getBankLoanAmountByNetWorth,
 } from '@/constants/bankLoans';
 import {
@@ -1114,7 +1114,7 @@ export const createBankLoan = async ({
       0,
     );
   const loanAmount = getBankLoanAmountByNetWorth(player.balance + assetValue);
-  const debtAmount = roundMoney(loanAmount + BANK_LOAN_INTEREST_AMOUNT);
+  const debtAmount = roundMoney(getBankLoanDebtAmount(loanAmount));
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
     [`players/${playerId}/balance`]: roundMoney(player.balance + loanAmount),

@@ -19,3 +19,7 @@ export const getBankLoanAmountByNetWorth = (netWorth: number) =>
       netWorth >= tier.minNetWorth &&
       (tier.maxNetWorth === null || netWorth <= tier.maxNetWorth),
   )?.loanAmount ?? BANK_LOAN_TIERS[0].loanAmount;
+
+// Use only when creating a new bank loan. Existing debts use stored remaining_amount.
+export const getBankLoanDebtAmount = (loanAmount: number) =>
+  loanAmount + BANK_LOAN_INTEREST_AMOUNT;

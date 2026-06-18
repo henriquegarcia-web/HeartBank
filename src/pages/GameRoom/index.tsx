@@ -70,6 +70,7 @@ import {
 import { AppLayout } from '@/components/ui';
 import {
   BANK_LOAN_INTEREST_AMOUNT,
+  getBankLoanDebtAmount,
   getBankLoanAmountByNetWorth,
 } from '@/constants/bankLoans';
 import {
@@ -681,9 +682,7 @@ export function GameRoom() {
     (currentPlayer?.balance ?? 0) + currentPlayerAssetValue,
   );
   const bankLoanAmount = getBankLoanAmountByNetWorth(currentPlayerNetWorth);
-  const bankLoanDebtAmount = roundMoney(
-    bankLoanAmount + BANK_LOAN_INTEREST_AMOUNT,
-  );
+  const bankLoanDebtAmount = roundMoney(getBankLoanDebtAmount(bankLoanAmount));
 
   const currentPlayerDebts = useMemo(
     () =>
