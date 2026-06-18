@@ -1,10 +1,16 @@
-﻿import { get, onValue, push, ref, update } from 'firebase/database';
+import { get, onValue, push, ref, update } from 'firebase/database';
 
 import { listRecords } from '@/api/firebaseDatabase';
 import {
   getBankLoanDebtAmount,
   getBankLoanAmountByNetWorth,
 } from '@/constants/bankLoans';
+import {
+  JAIL_POSITION,
+  NEWS_CARDS,
+  START_POSITION,
+  getBoardSpace,
+} from '@/constants/board';
 import {
   calculatePurchasedTitleAssetValue,
   getLandChargeAmount,
@@ -14,6 +20,8 @@ import { realtimeDatabase } from '@/firebase/database';
 import type { FirebaseRecord } from '@/types/firebase';
 import type {
   Debt,
+  GameLastRoll,
+  GameState,
   PendingRequest,
   Player,
   PurchasedTitle,
@@ -26,6 +34,15 @@ import {
   getDebtStage,
   isDebtStageBlockingPurchases,
 } from '@/utils/financialRules';
+import {
+  advanceBoardPosition,
+  getInitialPositions,
+  getNextTurn,
+  getRoundBonusAmount,
+  normalizePlayerOrder,
+  resolveJailRoll,
+  syncGameStateWithPlayers,
+} from '@/utils/gameController';
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
@@ -38,6 +55,7 @@ type RoomSnapshot = {
   debts: Array<FirebaseRecord<Debt>>;
   purchasedTitles: Array<FirebaseRecord<PurchasedTitle>>;
   pendingRequests: Array<FirebaseRecord<PendingRequest>>;
+  gameState: FirebaseRecord<GameState> | null;
 };
 
 type RoomListSnapshot = Array<
@@ -76,6 +94,7 @@ const withPlayerDefaults = <T extends FirebaseRecord<Player>>(
   ...player,
   is_jailed: player.is_jailed ?? false,
   is_bail_available: player.is_bail_available ?? false,
+  jail_attempts: player.jail_attempts ?? 0,
 });
 
 export const getRoomByCode = async (code: string) => {
@@ -158,6 +177,7 @@ export const deleteRoom = async (
     ]);
   const updates: Record<string, null> = {
     [`rooms/${roomId}`]: null,
+    [`game_states/${roomId}`]: null,
   };
 
   players
@@ -210,6 +230,7 @@ export const deleteRoomByMasterPassword = async (roomId: string) => {
     ]);
   const updates: Record<string, null> = {
     [`rooms/${roomId}`]: null,
+    [`game_states/${roomId}`]: null,
   };
 
   players
@@ -293,6 +314,7 @@ export const enterPlayerProfile = async ({
         is_banker: true,
         is_jailed: existingPlayer.is_jailed ?? false,
         is_bail_available: existingPlayer.is_bail_available ?? false,
+        jail_attempts: existingPlayer.jail_attempts ?? 0,
       };
     }
 
@@ -313,6 +335,7 @@ export const enterPlayerProfile = async ({
     is_banker: shouldAssignBanker,
     is_jailed: false,
     is_bail_available: false,
+    jail_attempts: 0,
     created_at: now(),
   };
 
@@ -350,7 +373,57 @@ const getPlayer = async (playerId: string) => {
     ...(snapshot.val() as Player),
     is_jailed: (snapshot.val() as Player).is_jailed ?? false,
     is_bail_available: (snapshot.val() as Player).is_bail_available ?? false,
+    jail_attempts: (snapshot.val() as Player).jail_attempts ?? 0,
   };
+};
+
+const getGameState = async (roomId: string) => {
+  const snapshot = await get(ref(realtimeDatabase, `game_states/${roomId}`));
+
+  if (!snapshot.exists()) {
+    throw new GameError('Partida não iniciada.');
+  }
+
+  return {
+    id: roomId,
+    ...(snapshot.val() as GameState),
+  };
+};
+
+const getRoomPlayers = async (roomId: string) => {
+  const players = await listRecords<Player>('players');
+
+  return players
+    .filter((player) => player.room_id === roomId)
+    .map((player) => withPlayerDefaults(player))
+    .sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const createBankToPlayerCredit = ({
+  updates,
+  roomId,
+  player,
+  amount,
+  executedByPlayerId,
+  reason,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  player: FirebaseRecord<Player>;
+  amount: number;
+  executedByPlayerId: string;
+  reason: string;
+}) => {
+  updates[`players/${player.id}/balance`] = roundMoney(player.balance + amount);
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'BANK_TO_PLAYER',
+    amount,
+    from_player_id: null,
+    to_player_id: player.id,
+    executed_by_player_id: executedByPlayerId,
+    reason,
+  });
 };
 
 const getPurchasedTitle = async (purchasedTitleId: string) => {
@@ -878,6 +951,457 @@ export const moveMoney = async ({
   await update(ref(realtimeDatabase), updates);
 };
 
+const getRandomDice = (): [number, number] => [
+  Math.floor(Math.random() * 6) + 1,
+  Math.floor(Math.random() * 6) + 1,
+];
+
+const getRandomNewsCard = () =>
+  NEWS_CARDS[Math.floor(Math.random() * NEWS_CARDS.length)];
+
+const buildGameStateUpdate = (gameState: FirebaseRecord<GameState>) => {
+  const { id: _id, ...value } = gameState;
+
+  return value satisfies GameState;
+};
+
+const addNextTurnToGameState = (
+  gameState: FirebaseRecord<GameState>,
+  playerOrder: string[],
+) => {
+  const nextTurn = getNextTurn({
+    playerOrder,
+    currentPlayerId: gameState.current_player_id,
+    roundNumber: gameState.round_number,
+  });
+
+  return {
+    ...gameState,
+    player_order: playerOrder,
+    current_player_id: nextTurn.currentPlayerId,
+    turn_index: nextTurn.turnIndex,
+    round_number: nextTurn.roundNumber,
+    round_bonus_amount: nextTurn.roundBonusAmount,
+    updated_at: now(),
+  };
+};
+
+export const startGameState = async ({
+  roomId,
+  executedByPlayerId,
+  playerOrder,
+}: {
+  roomId: string;
+  executedByPlayerId: string;
+  playerOrder: string[];
+}) => {
+  const [executedByPlayer, players] = await Promise.all([
+    getPlayer(executedByPlayerId),
+    getRoomPlayers(roomId),
+  ]);
+
+  assertBanker(executedByPlayer);
+  assertPlayerInRoom(executedByPlayer, roomId);
+
+  const normalizedOrder = normalizePlayerOrder(
+    playerOrder,
+    players.map((player) => player.id),
+  );
+
+  if (normalizedOrder.length === 0) {
+    throw new GameError('Inclua pelo menos um jogador na ordem.');
+  }
+
+  const createdAt = now();
+  const gameState: GameState = {
+    room_id: roomId,
+    player_order: normalizedOrder,
+    current_player_id: normalizedOrder[0] ?? null,
+    turn_index: 0,
+    round_number: 1,
+    round_bonus_amount: getRoundBonusAmount(1),
+    positions_by_player_id: getInitialPositions(normalizedOrder),
+    started_at: createdAt,
+    updated_at: createdAt,
+    last_roll: null,
+    last_news: null,
+    pending_news: null,
+  };
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: createdAt,
+    [`game_states/${roomId}`]: gameState,
+  };
+
+  players.forEach((player) => {
+    updates[`players/${player.id}/is_jailed`] = false;
+    updates[`players/${player.id}/is_bail_available`] = false;
+    updates[`players/${player.id}/jail_attempts`] = 0;
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
+
+export const updatePlayerOrder = async ({
+  roomId,
+  executedByPlayerId,
+  playerOrder,
+}: {
+  roomId: string;
+  executedByPlayerId: string;
+  playerOrder: string[];
+}) => {
+  const [executedByPlayer, players, storedGameState] = await Promise.all([
+    getPlayer(executedByPlayerId),
+    getRoomPlayers(roomId),
+    getGameState(roomId),
+  ]);
+
+  assertBanker(executedByPlayer);
+  assertPlayerInRoom(executedByPlayer, roomId);
+
+  const normalizedOrder = normalizePlayerOrder(
+    playerOrder,
+    players.map((player) => player.id),
+  );
+
+  if (normalizedOrder.length === 0) {
+    throw new GameError('Inclua pelo menos um jogador na ordem.');
+  }
+
+  const syncedGameState = syncGameStateWithPlayers(storedGameState, players);
+  const currentPlayerId = normalizedOrder.includes(
+    syncedGameState.current_player_id ?? '',
+  )
+    ? syncedGameState.current_player_id
+    : (normalizedOrder[0] ?? null);
+  const positionsByPlayerId = getInitialPositions(normalizedOrder);
+
+  Object.entries(syncedGameState.positions_by_player_id).forEach(
+    ([playerId, position]) => {
+      if (normalizedOrder.includes(playerId)) {
+        positionsByPlayerId[playerId] = position;
+      }
+    },
+  );
+
+  const gameState: FirebaseRecord<GameState> = {
+    ...syncedGameState,
+    player_order: normalizedOrder,
+    current_player_id: currentPlayerId,
+    turn_index: Math.max(0, normalizedOrder.indexOf(currentPlayerId ?? '')),
+    positions_by_player_id: positionsByPlayerId,
+    updated_at: now(),
+  };
+
+  await update(ref(realtimeDatabase), {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`game_states/${roomId}`]: buildGameStateUpdate(gameState),
+  });
+};
+
+const addAutomaticTitleCharge = ({
+  updates,
+  roomId,
+  playerId,
+  purchasedTitle,
+  diceTotal,
+}: {
+  updates: Record<string, unknown>;
+  roomId: string;
+  playerId: string;
+  purchasedTitle: FirebaseRecord<PurchasedTitle>;
+  diceTotal: number;
+}) => {
+  if (purchasedTitle.owner_player_id === playerId) {
+    return;
+  }
+
+  const definition = getTitleDefinition(purchasedTitle.title_id);
+
+  if (!definition) {
+    return;
+  }
+
+  const amount =
+    definition.kind === 'LAND'
+      ? getLandChargeAmount(purchasedTitle)
+      : diceTotal * definition.multiplier;
+
+  if (amount <= 0) {
+    return;
+  }
+
+  const createdRequest = createPendingRequestUpdate({
+    room_id: roomId,
+    kind: definition.kind === 'LAND' ? 'RENT_CHARGE' : 'STOCK_CHARGE',
+    requester_player_id: purchasedTitle.owner_player_id,
+    target_player_id: playerId,
+    amount,
+    title_id: purchasedTitle.title_id,
+    purchased_title_id: purchasedTitle.id,
+    requested_amount: null,
+    repayment_amount: null,
+    dice_count: definition.kind === 'STOCK' ? diceTotal : null,
+  });
+
+  updates[`pending_requests/${createdRequest.key}`] = createdRequest.value;
+};
+
+export const rollDiceForCurrentTurn = async ({
+  roomId,
+  executedByPlayerId,
+}: {
+  roomId: string;
+  executedByPlayerId: string;
+}) => {
+  const [executedByPlayer, players, storedGameState, purchasedTitles] =
+    await Promise.all([
+      getPlayer(executedByPlayerId),
+      getRoomPlayers(roomId),
+      getGameState(roomId),
+      listRecords<PurchasedTitle>('purchased_titles'),
+    ]);
+
+  assertPlayerInRoom(executedByPlayer, roomId);
+
+  if (storedGameState.pending_news) {
+    throw new GameError('Confirme a notícia pendente antes de rolar novamente.');
+  }
+
+  const syncedGameState = syncGameStateWithPlayers(storedGameState, players);
+  const playerOrder = syncedGameState.player_order;
+  const currentPlayer = players.find(
+    (player) => player.id === syncedGameState.current_player_id,
+  );
+
+  if (!currentPlayer || playerOrder.length === 0) {
+    throw new GameError('Configure a ordem dos jogadores antes de rolar.');
+  }
+
+  if (currentPlayer.id !== executedByPlayerId) {
+    throw new GameError('Aguarde a sua vez para rolar os dados.');
+  }
+
+  const dice = getRandomDice();
+  const diceTotal = dice[0] + dice[1];
+  const isDouble = dice[0] === dice[1];
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+  };
+  let fromPosition =
+    syncedGameState.positions_by_player_id[currentPlayer.id] ?? START_POSITION;
+  let toPosition = fromPosition;
+  let message = '';
+  let nextGameState: FirebaseRecord<GameState> = {
+    ...syncedGameState,
+    updated_at: now(),
+  };
+
+  if (currentPlayer.is_jailed) {
+    const jailResult = resolveJailRoll({
+      dice,
+      currentAttempts: currentPlayer.jail_attempts ?? 0,
+    });
+
+    if (!jailResult.isReleased) {
+      updates[`players/${currentPlayer.id}/jail_attempts`] =
+        jailResult.jailAttempts;
+      updates[`players/${currentPlayer.id}/is_bail_available`] =
+        jailResult.isBailAvailable;
+      message = jailResult.isBailAvailable
+        ? 'Não tirou dados iguais. A fiança foi liberada.'
+        : 'Não tirou dados iguais e segue preso.';
+
+      nextGameState = addNextTurnToGameState(nextGameState, playerOrder);
+      nextGameState.last_roll = {
+        player_id: currentPlayer.id,
+        dice,
+        total: diceTotal,
+        from_position: fromPosition,
+        to_position: fromPosition,
+        is_double: isDouble,
+        message,
+        created_at: now(),
+      };
+      updates[`game_states/${roomId}`] = buildGameStateUpdate(nextGameState);
+      await update(ref(realtimeDatabase), updates);
+      return nextGameState.last_roll;
+    }
+
+    updates[`players/${currentPlayer.id}/is_jailed`] = false;
+    updates[`players/${currentPlayer.id}/is_bail_available`] = false;
+    updates[`players/${currentPlayer.id}/jail_attempts`] = 0;
+    fromPosition = JAIL_POSITION;
+    message = 'Dados iguais. Saiu da prisão e avançou no tabuleiro.';
+  }
+
+  const advance = advanceBoardPosition(fromPosition, diceTotal);
+  toPosition = advance.toPosition;
+  nextGameState.positions_by_player_id = {
+    ...nextGameState.positions_by_player_id,
+    [currentPlayer.id]: toPosition,
+  };
+
+  if (advance.passedStart) {
+    createBankToPlayerCredit({
+      updates,
+      roomId,
+      player: currentPlayer,
+      amount: syncedGameState.round_bonus_amount,
+      executedByPlayerId,
+      reason: 'Bônus de rodada',
+    });
+  }
+
+  if (advance.space.kind === 'GO_TO_JAIL' || advance.space.kind === 'JAIL') {
+    toPosition = JAIL_POSITION;
+    nextGameState.positions_by_player_id[currentPlayer.id] = JAIL_POSITION;
+    updates[`players/${currentPlayer.id}/is_jailed`] = true;
+    updates[`players/${currentPlayer.id}/is_bail_available`] = false;
+    updates[`players/${currentPlayer.id}/jail_attempts`] = 0;
+    message = advance.space.kind === 'JAIL' ? 'Caiu na prisão.' : 'Foi enviado para a prisão.';
+  } else if (advance.space.kind === 'TAX_REFUND') {
+    createBankToPlayerCredit({
+      updates,
+      roomId,
+      player: currentPlayer,
+      amount: advance.space.amount ?? 0,
+      executedByPlayerId,
+      reason: 'Restituição do imposto de renda',
+    });
+    message = 'Recebeu restituição do imposto de renda.';
+  } else if (advance.space.kind === 'FEDERAL_TAX') {
+    addFlexiblePlayerToBankPayment({
+      updates,
+      roomId,
+      player: currentPlayer,
+      amount: advance.space.amount ?? 0,
+      executedByPlayerId: currentPlayer.id,
+      reason: 'Receita Federal',
+    });
+    message = 'Pagou a Receita Federal.';
+  } else if (advance.space.kind === 'NEWS') {
+    const card = getRandomNewsCard();
+    const news = {
+      player_id: currentPlayer.id,
+      card,
+      space_index: advance.space.index,
+    };
+    nextGameState.pending_news = news;
+    nextGameState.last_news = news;
+    message = 'Notícia pendente de confirmação.';
+  } else if (advance.space.title_id) {
+    const purchasedTitle = purchasedTitles.find(
+      (title) =>
+        title.room_id === roomId && title.title_id === advance.space.title_id,
+    );
+
+    if (purchasedTitle) {
+      addAutomaticTitleCharge({
+        updates,
+        roomId,
+        playerId: currentPlayer.id,
+        purchasedTitle,
+        diceTotal,
+      });
+      message =
+        purchasedTitle.owner_player_id === currentPlayer.id
+          ? 'Caiu no próprio título.'
+          : 'Cobrança automática criada.';
+    } else {
+      message = 'Título disponível para compra.';
+    }
+  } else if (advance.space.kind === 'HOLIDAY') {
+    message = 'Feriado. Nada acontece.';
+  } else {
+    message = message || `Caiu em ${advance.space.name}.`;
+  }
+
+  const lastRoll: GameLastRoll = {
+    player_id: currentPlayer.id,
+    dice,
+    total: diceTotal,
+    from_position: fromPosition,
+    to_position: toPosition,
+    is_double: isDouble,
+    message,
+    created_at: now(),
+  };
+
+  nextGameState.last_roll = lastRoll;
+
+  if (!nextGameState.pending_news) {
+    nextGameState = addNextTurnToGameState(nextGameState, playerOrder);
+  }
+
+  updates[`game_states/${roomId}`] = buildGameStateUpdate(nextGameState);
+  await update(ref(realtimeDatabase), updates);
+
+  return lastRoll;
+};
+
+export const confirmPendingNews = async ({
+  roomId,
+  playerId,
+}: {
+  roomId: string;
+  playerId: string;
+}) => {
+  const [player, players, storedGameState] = await Promise.all([
+    getPlayer(playerId),
+    getRoomPlayers(roomId),
+    getGameState(roomId),
+  ]);
+
+  assertPlayerInRoom(player, roomId);
+
+  if (!storedGameState.pending_news) {
+    throw new GameError('Não há notícia pendente.');
+  }
+
+  if (storedGameState.pending_news.player_id !== playerId) {
+    throw new GameError('Esta notícia pertence a outro jogador.');
+  }
+
+  const card = storedGameState.pending_news.card;
+  const syncedGameState = syncGameStateWithPlayers(storedGameState, players);
+  let nextGameState: FirebaseRecord<GameState> = {
+    ...syncedGameState,
+    pending_news: null,
+    updated_at: now(),
+  };
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+  };
+
+  if (card.type === 'LUCK') {
+    createBankToPlayerCredit({
+      updates,
+      roomId,
+      player,
+      amount: card.amount,
+      executedByPlayerId: playerId,
+      reason: `Notícia - ${card.action}`,
+    });
+  } else {
+    addFlexiblePlayerToBankPayment({
+      updates,
+      roomId,
+      player,
+      amount: card.amount,
+      executedByPlayerId: playerId,
+      reason: `Notícia - ${card.action}`,
+    });
+  }
+
+  nextGameState = addNextTurnToGameState(
+    nextGameState,
+    nextGameState.player_order,
+  );
+  updates[`game_states/${roomId}`] = buildGameStateUpdate(nextGameState);
+
+  await update(ref(realtimeDatabase), updates);
+};
 export const setPlayerJailStatus = async ({
   roomId,
   targetPlayerId,
@@ -902,6 +1426,7 @@ export const setPlayerJailStatus = async ({
     [`rooms/${roomId}/last_played_at`]: now(),
     [`players/${targetPlayerId}/is_jailed`]: isJailed,
     [`players/${targetPlayerId}/is_bail_available`]: false,
+    [`players/${targetPlayerId}/jail_attempts`]: 0,
   });
 };
 
@@ -1035,6 +1560,7 @@ export const payJailBail = async ({
     [`rooms/${roomId}/last_played_at`]: now(),
     [`players/${playerId}/is_jailed`]: false,
     [`players/${playerId}/is_bail_available`]: false,
+    [`players/${playerId}/jail_attempts`]: 0,
   };
 
   addFlexiblePlayerToBankPayment({
@@ -1250,9 +1776,20 @@ export const requestTitlePurchase = async ({
     throw new GameError('Título inválido.');
   }
 
-  const player = await getPlayer(playerId);
+  const [player, gameState] = await Promise.all([
+    getPlayer(playerId),
+    getGameState(roomId),
+  ]);
+  const currentPosition = gameState.positions_by_player_id[playerId];
+  const currentSpace = currentPosition ? getBoardSpace(currentPosition) : null;
+
   assertPlayerInRoom(player, roomId);
   await assertPlayerCanAcquireAssets(roomId, playerId);
+
+  if (!currentSpace || currentSpace.title_id !== titleId) {
+    throw new GameError('Você só pode comprar o título da casa atual.');
+  }
+
   assertCanDebit(player, definition.purchase_price);
   await assertTitleAvailable(roomId, titleId);
 
@@ -1286,11 +1823,14 @@ export const upgradePurchasedTitle = async ({
   purchasedTitleId: string;
   upgrade: 'HOUSE' | 'HOTEL';
 }) => {
-  const [player, purchasedTitle] = await Promise.all([
+  const [player, purchasedTitle, gameState] = await Promise.all([
     getPlayer(playerId),
     getPurchasedTitle(purchasedTitleId),
+    getGameState(roomId),
   ]);
   const definition = getTitleDefinition(purchasedTitle.title_id);
+  const currentPosition = gameState.positions_by_player_id[playerId];
+  const currentSpace = currentPosition ? getBoardSpace(currentPosition) : null;
 
   assertPlayerInRoom(player, roomId);
   await assertPlayerCanAcquireAssets(roomId, playerId);
@@ -1306,9 +1846,24 @@ export const upgradePurchasedTitle = async ({
     throw new GameError('Apenas terrenos podem receber casas ou hotel.');
   }
 
+  if (!currentSpace || currentSpace.title_id !== purchasedTitle.title_id) {
+    throw new GameError('Você só pode melhorar o terreno da casa atual.');
+  }
+
+  if (
+    purchasedTitle.last_development_round_number === gameState.round_number &&
+    purchasedTitle.last_development_position === currentPosition
+  ) {
+    throw new GameError('Você precisa cair novamente neste terreno para fazer outra melhoria.');
+  }
+
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
     [`purchased_titles/${purchasedTitleId}/updated_at`]: now(),
+    [`purchased_titles/${purchasedTitleId}/last_development_round_number`]:
+      gameState.round_number,
+    [`purchased_titles/${purchasedTitleId}/last_development_position`]:
+      currentPosition,
   };
 
   if (upgrade === 'HOUSE') {
@@ -1613,13 +2168,22 @@ export const acceptPendingRequest = async ({
     }
 
     const definition = getTitleDefinition(request.title_id);
-    const buyer = await getPlayer(request.target_player_id);
+    const [buyer, gameState] = await Promise.all([
+      getPlayer(request.target_player_id),
+      getGameState(request.room_id),
+    ]);
+    const currentPosition = gameState.positions_by_player_id[buyer.id];
+    const currentSpace = currentPosition ? getBoardSpace(currentPosition) : null;
 
     if (!definition) {
       throw new GameError('Título inválido.');
     }
 
     assertPlayerInRoom(buyer, request.room_id);
+
+    if (!currentSpace || currentSpace.title_id !== request.title_id) {
+      throw new GameError('Você só pode comprar o título da casa atual.');
+    }
     await assertPlayerCanAcquireAssets(request.room_id, buyer.id);
     await assertTitleAvailable(request.room_id, request.title_id);
     addDirectPlayerToBankPayment({
@@ -1639,6 +2203,8 @@ export const acceptPendingRequest = async ({
       purchase_price: definition.purchase_price,
       houses: 0,
       has_hotel: false,
+      last_development_round_number: gameState.round_number,
+      last_development_position: currentPosition,
     });
     updates[`purchased_titles/${purchasedTitle.key}`] = purchasedTitle.value;
   }
@@ -1800,6 +2366,7 @@ export const subscribeRoomSnapshot = (
       debts?: Record<string, Debt>;
       purchased_titles?: Record<string, PurchasedTitle>;
       pending_requests?: Record<string, PendingRequest>;
+      game_states?: Record<string, GameState>;
     };
     const room = value.rooms?.[roomId];
 
@@ -1834,7 +2401,15 @@ export const subscribeRoomSnapshot = (
       .filter(([, request]) => request.room_id === roomId)
       .map(([id, request]) => ({ id, ...request }))
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
-
+    const gameState = value.game_states?.[roomId]
+      ? syncGameStateWithPlayers(
+          {
+            id: roomId,
+            ...value.game_states[roomId],
+          },
+          players,
+        )
+      : null;
     callback({
       room: {
         id: roomId,
@@ -1847,5 +2422,6 @@ export const subscribeRoomSnapshot = (
       debts,
       purchasedTitles,
       pendingRequests,
+      gameState,
     });
   });

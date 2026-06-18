@@ -6,6 +6,19 @@ export type TransactionType =
 
 export type TitleKind = 'LAND' | 'STOCK';
 
+export type BoardSpaceKind =
+  | 'START'
+  | 'LAND'
+  | 'STOCK'
+  | 'NEWS'
+  | 'JAIL'
+  | 'GO_TO_JAIL'
+  | 'TAX_REFUND'
+  | 'FEDERAL_TAX'
+  | 'HOLIDAY';
+
+export type NewsCardType = 'LUCK' | 'SETBACK';
+
 export type PendingRequestKind =
   | 'PLAYER_LOAN'
   | 'RENT_CHARGE'
@@ -45,6 +58,53 @@ export type StockTitleDefinition = {
 
 export type TitleDefinition = LandTitleDefinition | StockTitleDefinition;
 
+export type BoardSpace = {
+  index: number;
+  name: string;
+  kind: BoardSpaceKind;
+  title_id: string | null;
+  amount: number | null;
+};
+
+export type NewsCard = {
+  id: string;
+  action: string;
+  type: NewsCardType;
+  amount: number;
+};
+
+export type GameLastRoll = {
+  player_id: string;
+  dice: [number, number];
+  total: number;
+  from_position: number;
+  to_position: number;
+  is_double: boolean;
+  message: string;
+  created_at: string;
+};
+
+export type PendingNews = {
+  player_id: string;
+  card: NewsCard;
+  space_index: number;
+};
+
+export type GameState = {
+  room_id: string;
+  player_order: string[];
+  current_player_id: string | null;
+  turn_index: number;
+  round_number: number;
+  round_bonus_amount: number;
+  positions_by_player_id: Record<string, number>;
+  started_at: string;
+  updated_at: string;
+  last_roll: GameLastRoll | null;
+  last_news: PendingNews | null;
+  pending_news: PendingNews | null;
+};
+
 export type Room = {
   name: string;
   code: string;
@@ -61,6 +121,7 @@ export type Player = {
   is_banker: boolean;
   is_jailed: boolean;
   is_bail_available: boolean;
+  jail_attempts: number;
   created_at: string;
 };
 
@@ -94,6 +155,8 @@ export type PurchasedTitle = {
   purchase_price: number;
   houses: number;
   has_hotel: boolean;
+  last_development_round_number: number | null;
+  last_development_position: number | null;
   created_at: string;
   updated_at: string;
 };

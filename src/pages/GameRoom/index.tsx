@@ -1,4 +1,4 @@
-﻿import {
+import {
   Alert,
   App,
   Button,
@@ -28,16 +28,25 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
+  LuArrowDown,
   LuArrowLeft,
+  LuArrowUp,
+  LuCheck,
   LuCalculator,
   LuCircleDollarSign,
+  LuCircle,
   LuDices,
   LuHistory,
   LuHouse,
   LuHotel,
   LuLock,
   LuLockOpen,
+  LuPlus,
   LuLogOut,
+  LuTrash2,
+  LuTriangleAlert,
+  LuPlay,
+  LuSave,
   LuMedal,
   LuLandmark,
   LuScrollText,
@@ -51,16 +60,16 @@ import { GiHandcuffs } from 'react-icons/gi';
 import {
   acceptPendingRequest,
   cancelPendingChargeRequest,
+  confirmPendingNews,
   createBankLoan,
   createPlayerLoanRequest,
-  createRentChargeRequest,
-  createStockChargeRequest,
   createTitleSaleRequest,
   declinePendingRequest,
   deleteRoom,
   enterRoomByCode,
   GameError,
   JAIL_BAIL_AMOUNT,
+  rollDiceForCurrentTurn,
   moveMoney,
   payDebt,
   payJailBail,
@@ -68,8 +77,10 @@ import {
   requestTitlePurchase,
   resignPlayer,
   sellTitleToBank,
+  startGameState,
   setPlayerJailStatus,
   subscribeRoomSnapshot,
+  updatePlayerOrder,
   upgradePurchasedTitle,
 } from '@/api/gameService';
 import { AppLayout } from '@/components/ui';
@@ -78,15 +89,18 @@ import {
   getBankLoanDebtAmount,
   getBankLoanAmountByNetWorth,
 } from '@/constants/bankLoans';
+import { getBoardSpace } from '@/constants/board';
 import {
   calculatePurchasedTitleAssetValue,
   getLandChargeAmount,
   getTitleDefinition,
-  TITLE_OPTIONS,
 } from '@/constants/gameTitles';
 import type { FirebaseRecord } from '@/types/firebase';
 import type {
+  BoardSpaceKind,
   Debt,
+  GameLastRoll,
+  GameState,
   PendingRequest,
   Player,
   PurchasedTitle,
@@ -121,15 +135,6 @@ type InterestCalculatorFormValues = {
   mode?: 'ADD' | 'SUBTRACT';
 };
 
-type TitlePurchaseFormValues = {
-  titleId?: string;
-};
-
-type ChargeFormValues = {
-  payerPlayerId?: string;
-  diceCount?: number;
-};
-
 type SaleFormValues = {
   mode?: 'BANK' | 'PLAYER';
   buyerPlayerId?: string;
@@ -144,6 +149,17 @@ type CancelChargeFormValues = {
   masterPassword?: string;
 };
 
+type ChecklistFormValues = {
+  text?: string;
+};
+
+type ChecklistItem = {
+  id: string;
+  text: string;
+  isDone: boolean;
+  createdAt: string;
+};
+
 type RoomState = {
   id: string;
   name: string;
@@ -152,6 +168,7 @@ type RoomState = {
   debts: Array<FirebaseRecord<Debt>>;
   purchasedTitles: Array<FirebaseRecord<PurchasedTitle>>;
   pendingRequests: Array<FirebaseRecord<PendingRequest>>;
+  gameState: FirebaseRecord<GameState> | null;
 };
 
 type RankingPlayer = FirebaseRecord<Player> & {
@@ -160,16 +177,23 @@ type RankingPlayer = FirebaseRecord<Player> & {
 };
 
 type TitleActionModal = {
-  kind: 'RENT' | 'STOCK' | 'SALE';
+  kind: 'SALE';
   purchasedTitle: FirebaseRecord<PurchasedTitle>;
 } | null;
 
 type DebtPaymentModal = FirebaseRecord<Debt> | null;
+type DiceOverlayState = {
+  isVisible: boolean;
+  isRolling: boolean;
+  dice: [number, number] | null;
+  total: number | null;
+};
 type GameTabKey =
-  | 'player'
+  | 'game'
   | 'loans'
   | 'titles'
   | 'ranking'
+  | 'checklist'
   | 'calculator'
   | 'history'
   | 'banker';
@@ -181,11 +205,6 @@ type GameNavigationItem = {
 };
 
 const QUICK_AMOUNTS = [20, 50, 100, 500, 1000];
-
-const BANK_PAYMENT_REASON_OPTIONS = ['Notícia', 'Imposto'].map((reason) => ({
-  label: reason,
-  value: reason,
-}));
 
 const BANK_ACTION_REASON_OPTIONS = [
   'Notícia',
@@ -202,14 +221,6 @@ const PRESET_REASON_AMOUNTS: Record<string, number> = {
   'Restituição do Imposto': 2000,
 };
 
-const DICE_OPTIONS = Array.from({ length: 12 }, (_, index) => {
-  const value = index + 1;
-
-  return {
-    label: String(value),
-    value,
-  };
-});
 const BANK_TITLE_SALE_RATE = 0.75;
 
 const CALCULATOR_KEYS = [
@@ -257,12 +268,6 @@ const getTransactionSignal = (
 
   return transaction.type === 'BANK_TO_PLAYER' ? '+' : '-';
 };
-
-const normalizeSearchText = (value: string) =>
-  value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
 
 const playPixAudio = () => {
   const audio = new Audio(PIX_AUDIO_SRC);
@@ -333,6 +338,103 @@ const getPurchasedTitleValuation = (
   };
 };
 
+const BOARD_SPACE_KIND_LABELS: Record<BoardSpaceKind, string> = {
+  START: 'Início',
+  LAND: 'Terreno',
+  STOCK: 'Ação',
+  NEWS: 'Notícia',
+  JAIL: 'Prisão',
+  GO_TO_JAIL: 'Vá para a prisão',
+  TAX_REFUND: 'Banco paga',
+  FEDERAL_TAX: 'Imposto',
+  HOLIDAY: 'Feriado',
+};
+
+const getBoardSpaceHeaderColor = ({
+  kind,
+  titleColor,
+}: {
+  kind: BoardSpaceKind;
+  titleColor?: string;
+}) => {
+  if (titleColor) {
+    return titleColor;
+  }
+
+  if (kind === 'JAIL' || kind === 'GO_TO_JAIL') {
+    return '#102a56';
+  }
+
+  if (kind === 'START' || kind === 'TAX_REFUND' || kind === 'FEDERAL_TAX') {
+    return '#1677ff';
+  }
+
+  if (kind === 'NEWS') {
+    return '#d48806';
+  }
+
+  if (kind === 'HOLIDAY') {
+    return '#389e0d';
+  }
+
+  return '#30343b';
+};
+
+const getBoardSpaceStatus = ({
+  kind,
+  amount,
+  titleDefinitionName,
+  ownerName,
+  houses,
+  hasHotel,
+}: {
+  kind: BoardSpaceKind;
+  amount: number | null;
+  titleDefinitionName?: string;
+  ownerName?: string | null;
+  houses?: number;
+  hasHotel?: boolean;
+}) => {
+  if (titleDefinitionName) {
+    if (!ownerName) {
+      return 'Disponível para compra';
+    }
+
+    const improvements = hasHotel
+      ? 'com hotel'
+      : houses
+        ? `com ${houses} casa${houses > 1 ? 's' : ''}`
+        : 'sem construções';
+
+    return `${ownerName} é dono, ${improvements}`;
+  }
+
+  if (kind === 'START') {
+    return 'Recebe bônus ao passar por aqui';
+  }
+
+  if (kind === 'TAX_REFUND') {
+    return `Recebe ${formatCurrency(amount ?? 0)} do banco`;
+  }
+
+  if (kind === 'FEDERAL_TAX') {
+    return `Paga ${formatCurrency(amount ?? 0)} ao banco`;
+  }
+
+  if (kind === 'NEWS') {
+    return 'Abre uma notícia para confirmação';
+  }
+
+  if (kind === 'JAIL') {
+    return 'Casa da prisão';
+  }
+
+  if (kind === 'GO_TO_JAIL') {
+    return 'Envia o jogador para a prisão';
+  }
+
+  return 'Nada acontece';
+};
 function PlayerFinancialSummary({
   player,
   assetValue,
@@ -629,31 +731,44 @@ function InterestCalculator() {
         requiredMark={false}
         initialValues={{ mode: 'ADD', interestRate: 0 }}
       >
-        <Form.Item name="baseAmount" label="Valor base">
-          <InputNumber
-            min={0}
-            precision={2}
-            style={{ width: '100%' }}
-            prefix="R$"
-          />
-        </Form.Item>
-        <Form.Item name="interestRate" label="Taxa de juros">
-          <InputNumber
-            min={0}
-            precision={2}
-            style={{ width: '100%' }}
-            suffix="%"
-          />
-        </Form.Item>
+        <Row gutter={12}>
+          <Col xs={12}>
+            <Form.Item name="baseAmount" label="Valor base">
+              <InputNumber
+                min={0}
+                precision={2}
+                style={{ width: '100%' }}
+                prefix="R$"
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={12}>
+            <Form.Item name="interestRate" label="Taxa de juros">
+              <InputNumber
+                min={0}
+                precision={2}
+                style={{ width: '100%' }}
+                suffix="%"
+              />
+            </Form.Item>
+          </Col>
+        </Row>
         <Form.Item name="mode" label="Operação">
           <Radio.Group
-            optionType="button"
             buttonStyle="solid"
-            options={[
-              { label: 'Acrescentar juros', value: 'ADD' },
-              { label: 'Descontar juros', value: 'SUBTRACT' },
-            ]}
-          />
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              width: '100%',
+            }}
+          >
+            <Radio.Button value="ADD" style={{ textAlign: 'center' }}>
+              Acrescentar juros
+            </Radio.Button>
+            <Radio.Button value="SUBTRACT" style={{ textAlign: 'center' }}>
+              Descontar juros
+            </Radio.Button>
+          </Radio.Group>
         </Form.Item>
         <Descriptions column={1} size="small" bordered>
           <Descriptions.Item label="Juros">
@@ -668,17 +783,143 @@ function InterestCalculator() {
   );
 }
 
+function ChecklistPage({ storageKey }: { storageKey: string }) {
+  const [form] = Form.useForm<ChecklistFormValues>();
+  const [items, setItems] = useState<ChecklistItem[]>(() => {
+    try {
+      const storedItems = window.localStorage.getItem(storageKey);
+
+      return storedItems ? (JSON.parse(storedItems) as ChecklistItem[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, JSON.stringify(items));
+  }, [items, storageKey]);
+
+  const addItem = ({ text }: ChecklistFormValues) => {
+    const trimmedText = text?.trim();
+
+    if (!trimmedText) {
+      return;
+    }
+
+    setItems((currentItems) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        text: trimmedText,
+        isDone: false,
+        createdAt: new Date().toISOString(),
+      },
+      ...currentItems,
+    ]);
+    form.resetFields();
+  };
+
+  const toggleItem = (itemId: string) => {
+    setItems((currentItems) =>
+      currentItems.map((item) =>
+        item.id === itemId ? { ...item, isDone: !item.isDone } : item,
+      ),
+    );
+  };
+
+  const deleteItem = (itemId: string) => {
+    setItems((currentItems) =>
+      currentItems.filter((item) => item.id !== itemId),
+    );
+  };
+
+  return (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={12}>
+        <Card title="Meus objetivos">
+          <Flex vertical gap={16}>
+            <Form
+              form={form}
+              layout="vertical"
+              requiredMark={false}
+              onFinish={addItem}
+            >
+              <Space.Compact style={{ width: '100%' }}>
+                <Form.Item
+                  name="text"
+                  noStyle
+                  rules={[
+                    {
+                      required: true,
+                      whitespace: true,
+                      message: 'Informe uma meta.',
+                    },
+                  ]}
+                >
+                  <Input placeholder="Adicionar meta" />
+                </Form.Item>
+                <Button type="primary" htmlType="submit" icon={<LuPlus />}>
+                  Adicionar
+                </Button>
+              </Space.Compact>
+            </Form>
+
+            {items.length > 0 ? (
+              <Flex vertical gap={8}>
+                {items.map((item) => (
+                  <Flex
+                    key={item.id}
+                    align="center"
+                    gap={8}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid rgba(0, 0, 0, 0.08)',
+                      borderRadius: 8,
+                      background: item.isDone ? '#f6ffed' : '#fff',
+                    }}
+                  >
+                    <Button
+                      aria-label={
+                        item.isDone
+                          ? 'Marcar como pendente'
+                          : 'Marcar como concluída'
+                      }
+                      shape="circle"
+                      type={item.isDone ? 'primary' : 'default'}
+                      icon={item.isDone ? <LuCheck /> : <LuCircle />}
+                      onClick={() => toggleItem(item.id)}
+                    />
+                    <Typography.Text
+                      delete={item.isDone}
+                      style={{ flex: 1, minWidth: 0 }}
+                    >
+                      {item.text}
+                    </Typography.Text>
+                    <Button
+                      aria-label="Excluir meta"
+                      danger
+                      icon={<LuTrash2 />}
+                      onClick={() => deleteItem(item.id)}
+                    />
+                  </Flex>
+                ))}
+              </Flex>
+            ) : (
+              <Empty description="Nenhuma meta criada" />
+            )}
+          </Flex>
+        </Card>
+      </Col>
+    </Row>
+  );
+}
 export function GameRoom() {
   const { message, modal, notification } = App.useApp();
   const navigate = useNavigate();
   const { code, playerId } = useParams<{ code: string; playerId: string }>();
   const [state, setState] = useState<RoomState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [bankPaymentForm] = Form.useForm<MoneyFormValues>();
   const [adminForm] = Form.useForm<MoneyFormValues>();
   const [playerLoanForm] = Form.useForm<PlayerLoanFormValues>();
-  const [titlePurchaseForm] = Form.useForm<TitlePurchaseFormValues>();
-  const [chargeForm] = Form.useForm<ChargeFormValues>();
   const [saleForm] = Form.useForm<SaleFormValues>();
   const [debtPaymentForm] = Form.useForm<DebtPaymentFormValues>();
   const [cancelChargeForm] = Form.useForm<CancelChargeFormValues>();
@@ -688,12 +929,16 @@ export function GameRoom() {
   const [debtPaymentModal, setDebtPaymentModal] =
     useState<DebtPaymentModal>(null);
   const [isCancelChargeModalOpen, setIsCancelChargeModalOpen] = useState(false);
-  const [activeTabKey, setActiveTabKey] = useState<GameTabKey>('player');
-  const [selectedTitleId, setSelectedTitleId] = useState<string>();
-  const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
+  const [activeTabKey, setActiveTabKey] = useState<GameTabKey>('game');
+  const [playerOrderDraft, setPlayerOrderDraft] = useState<string[]>([]);
+  const [diceOverlay, setDiceOverlay] = useState<DiceOverlayState>({
+    isVisible: false,
+    isRolling: false,
+    dice: null,
+    total: null,
+  });
   const seenTransactionIdsRef = useRef<Set<string>>(new Set());
   const didInitializeNotificationsRef = useRef(false);
-  const bankPaymentReason = Form.useWatch('reason', bankPaymentForm);
   const adminReason = Form.useWatch('reason', adminForm);
   const debtPaymentAmount = Form.useWatch('amount', debtPaymentForm);
   const saleMode = Form.useWatch('mode', saleForm) ?? 'PLAYER';
@@ -705,20 +950,9 @@ export function GameRoom() {
     playerLoanRequestedAmount,
     playerLoanInterestRate,
   );
-  const isBankPaymentAmountLocked = Boolean(
-    bankPaymentReason && PRESET_REASON_AMOUNTS[bankPaymentReason],
-  );
   const isAdminAmountLocked = Boolean(
     adminReason && PRESET_REASON_AMOUNTS[adminReason],
   );
-
-  useEffect(() => {
-    const amount = bankPaymentReason
-      ? PRESET_REASON_AMOUNTS[bankPaymentReason]
-      : undefined;
-
-    bankPaymentForm.setFieldValue('amount', amount);
-  }, [bankPaymentForm, bankPaymentReason]);
 
   useEffect(() => {
     const amount = adminReason ? PRESET_REASON_AMOUNTS[adminReason] : undefined;
@@ -758,6 +992,7 @@ export function GameRoom() {
           debts: snapshot.debts,
           purchasedTitles: snapshot.purchasedTitles,
           pendingRequests: snapshot.pendingRequests,
+          gameState: snapshot.gameState,
         });
       });
     };
@@ -811,6 +1046,36 @@ export function GameRoom() {
     () => state?.players.find((player) => player.id === playerId) ?? null,
     [playerId, state?.players],
   );
+  const checklistStorageKey = `coracao-bank:checklist:${code ?? 'room'}:${
+    playerId ?? 'player'
+  }`;
+  useEffect(() => {
+    if (!state) {
+      setPlayerOrderDraft([]);
+      return;
+    }
+
+    const activePlayerIds = state.players.map((player) => player.id);
+
+    setPlayerOrderDraft((currentOrder) => {
+      const sourceOrder = state.gameState?.player_order.length
+        ? state.gameState.player_order
+        : currentOrder;
+      const nextOrder = sourceOrder.filter((orderedPlayerId) =>
+        activePlayerIds.includes(orderedPlayerId),
+      );
+
+      activePlayerIds.forEach((activePlayerId) => {
+        if (!nextOrder.includes(activePlayerId)) {
+          nextOrder.push(activePlayerId);
+        }
+      });
+
+      return currentOrder.join('|') === nextOrder.join('|')
+        ? currentOrder
+        : nextOrder;
+    });
+  }, [state]);
 
   useEffect(() => {
     if (!debtPaymentModal) {
@@ -828,7 +1093,7 @@ export function GameRoom() {
 
   useEffect(() => {
     if (activeTabKey === 'banker' && !currentPlayer?.is_banker) {
-      setActiveTabKey('player');
+      setActiveTabKey('game');
     }
   }, [activeTabKey, currentPlayer?.is_banker]);
 
@@ -849,29 +1114,6 @@ export function GameRoom() {
         value: player.id,
       })),
     [state?.players],
-  );
-
-  const purchasedTitleIds = useMemo(
-    () =>
-      new Set((state?.purchasedTitles ?? []).map((title) => title.title_id)),
-    [state?.purchasedTitles],
-  );
-
-  const availableTitleOptions = useMemo(
-    () =>
-      TITLE_OPTIONS.filter((title) => !purchasedTitleIds.has(title.id)).map(
-        (title) => ({
-          label: `${title.name} - ${formatCurrency(title.purchase_price)}`,
-          value: title.id,
-          searchText: normalizeSearchText(title.name),
-        }),
-      ),
-    [purchasedTitleIds],
-  );
-
-  const selectedTitle = useMemo(
-    () => getTitleDefinition(selectedTitleId ?? null),
-    [selectedTitleId],
   );
 
   const currentPlayerTitles = useMemo(
@@ -931,7 +1173,8 @@ export function GameRoom() {
   );
   const isDebtPurchaseBlocked = isDebtStageBlockingPurchases(currentDebtStage);
   const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
-  const isTitlesTabAvailableWhileRestricted = activeTabKey === 'titles';
+  const isTitlesTabAvailableWhileRestricted =
+    activeTabKey === 'titles' || activeTabKey === 'game';
   const shouldShowJailBackdrop =
     isCurrentPlayerJailed &&
     !isTitlesTabAvailableWhileRestricted &&
@@ -981,21 +1224,110 @@ export function GameRoom() {
     () => getTitleDefinition(activePendingRequest?.title_id ?? null),
     [activePendingRequest],
   );
-
-  const selectedModalTitleDefinition = useMemo(
-    () => getTitleDefinition(titleActionModal?.purchasedTitle.title_id ?? null),
-    [titleActionModal],
-  );
-
-  const selectedStockChargeAmount =
-    titleActionModal?.kind === 'STOCK' &&
-    selectedModalTitleDefinition?.kind === 'STOCK'
-      ? (selectedDiceCount ?? 0) * selectedModalTitleDefinition.multiplier
-      : 0;
   const selectedSaleValuation =
     titleActionModal?.kind === 'SALE'
       ? getPurchasedTitleValuation(titleActionModal.purchasedTitle)
       : null;
+  const gameState = state?.gameState ?? null;
+  const currentTurnPlayer =
+    state?.players.find(
+      (player) => player.id === gameState?.current_player_id,
+    ) ?? null;
+  const currentPlayerPosition = currentPlayer
+    ? (gameState?.positions_by_player_id[currentPlayer.id] ?? 1)
+    : 1;
+  const currentPlayerSpace = getBoardSpace(currentPlayerPosition);
+  const currentPlayerSpacePurchasedTitle = currentPlayerSpace.title_id
+    ? (state?.purchasedTitles ?? []).find(
+        (title) => title.title_id === currentPlayerSpace.title_id,
+      )
+    : null;
+  const currentPlayerSpaceTitleDefinition = getTitleDefinition(
+    currentPlayerSpace.title_id,
+  );
+  const currentPlayerSpaceTitleOwner = currentPlayerSpacePurchasedTitle
+    ? getPlayerName(
+        state?.players ?? [],
+        currentPlayerSpacePurchasedTitle.owner_player_id,
+      )
+    : null;
+  const currentPlayerSpaceColor = getBoardSpaceHeaderColor({
+    kind: currentPlayerSpace.kind,
+    titleColor: currentPlayerSpaceTitleDefinition?.color,
+  });
+  const hasCurrentPlayerSpaceActionThisRound = Boolean(
+    gameState &&
+    currentPlayerSpacePurchasedTitle &&
+    currentPlayerSpacePurchasedTitle.last_development_round_number ===
+      gameState.round_number &&
+    currentPlayerSpacePurchasedTitle.last_development_position ===
+      currentPlayerPosition,
+  );
+  const currentPlayerSpaceStatus = getBoardSpaceStatus({
+    kind: currentPlayerSpace.kind,
+    amount: currentPlayerSpace.amount,
+    titleDefinitionName: currentPlayerSpaceTitleDefinition?.name,
+    ownerName: currentPlayerSpaceTitleOwner,
+    houses: currentPlayerSpacePurchasedTitle?.houses,
+    hasHotel: currentPlayerSpacePurchasedTitle?.has_hotel,
+  });
+  const canBuyCurrentPlayerSpaceTitle = Boolean(
+    currentPlayerSpaceTitleDefinition &&
+    !currentPlayerSpacePurchasedTitle &&
+    !isCurrentPlayerJailed &&
+    !isDebtPurchaseBlocked &&
+    (currentPlayer?.balance ?? 0) >=
+      currentPlayerSpaceTitleDefinition.purchase_price,
+  );
+  const canUpgradeCurrentPlayerSpaceTitle = Boolean(
+    currentPlayerSpaceTitleDefinition?.kind === 'LAND' &&
+    currentPlayerSpacePurchasedTitle &&
+    currentPlayerSpacePurchasedTitle.owner_player_id === playerId &&
+    !currentPlayerSpacePurchasedTitle.has_hotel &&
+    !hasCurrentPlayerSpaceActionThisRound &&
+    !isCurrentPlayerJailed &&
+    !isDebtPurchaseBlocked,
+  );
+  const nextCurrentPlayerSpaceUpgrade =
+    currentPlayerSpaceTitleDefinition?.kind === 'LAND' &&
+    currentPlayerSpacePurchasedTitle
+      ? currentPlayerSpacePurchasedTitle.houses < 4
+        ? 'HOUSE'
+        : 'HOTEL'
+      : null;
+  const currentPlayerSpaceUpgradeAmount =
+    currentPlayerSpaceTitleDefinition?.kind === 'LAND'
+      ? nextCurrentPlayerSpaceUpgrade === 'HOUSE'
+        ? currentPlayerSpaceTitleDefinition.acquisition.house_price
+        : currentPlayerSpaceTitleDefinition.acquisition.hotel_price
+      : 0;
+  const canPayCurrentPlayerSpaceUpgrade = Boolean(
+    canUpgradeCurrentPlayerSpaceTitle &&
+    currentPlayerSpacePurchasedTitle &&
+    nextCurrentPlayerSpaceUpgrade &&
+    (currentPlayer?.balance ?? 0) >= currentPlayerSpaceUpgradeAmount,
+  );
+  const pendingNewsForCurrentPlayer =
+    gameState?.pending_news && gameState.pending_news.player_id === playerId
+      ? gameState.pending_news
+      : null;
+  const lastRollPlayerName = gameState?.last_roll
+    ? getPlayerName(state?.players ?? [], gameState.last_roll.player_id)
+    : null;
+  const lastNews = gameState?.last_news ?? null;
+  const lastNewsColor = lastNews?.card.type === 'LUCK' ? '#237804' : '#cf1322';
+  const isRollBlocked =
+    !gameState ||
+    !gameState.current_player_id ||
+    Boolean(gameState?.pending_news) ||
+    gameState.current_player_id !== playerId ||
+    isSubmitting ||
+    diceOverlay.isVisible;
+  const orderedPlayers = playerOrderDraft
+    .map((orderedPlayerId) =>
+      (state?.players ?? []).find((player) => player.id === orderedPlayerId),
+    )
+    .filter((player): player is FirebaseRecord<Player> => Boolean(player));
 
   useEffect(() => {
     if (titleActionModal?.kind !== 'SALE') {
@@ -1030,19 +1362,14 @@ export function GameRoom() {
     try {
       await action();
       message.success(successMessage);
-      bankPaymentForm.resetFields();
       adminForm.resetFields();
       playerLoanForm.resetFields();
-      titlePurchaseForm.resetFields();
-      chargeForm.resetFields();
       saleForm.resetFields();
       debtPaymentForm.resetFields();
       cancelChargeForm.resetFields();
       setTitleActionModal(null);
       setDebtPaymentModal(null);
       setIsCancelChargeModalOpen(false);
-      setSelectedTitleId(undefined);
-      setSelectedDiceCount(undefined);
     } catch (error) {
       message.error(
         error instanceof GameError
@@ -1054,26 +1381,115 @@ export function GameRoom() {
     }
   };
 
+  const movePlayerInOrder = (playerIdToMove: string, direction: -1 | 1) => {
+    setPlayerOrderDraft((currentOrder) => {
+      const currentIndex = currentOrder.indexOf(playerIdToMove);
+      const nextIndex = currentIndex + direction;
+
+      if (
+        currentIndex < 0 ||
+        nextIndex < 0 ||
+        nextIndex >= currentOrder.length
+      ) {
+        return currentOrder;
+      }
+
+      const nextOrder = [...currentOrder];
+      const [removedPlayerId] = nextOrder.splice(currentIndex, 1);
+      nextOrder.splice(nextIndex, 0, removedPlayerId);
+
+      return nextOrder;
+    });
+  };
+
+  const handleStartGameState = () =>
+    executeAction(
+      () =>
+        startGameState({
+          roomId: currentPlayer?.room_id ?? '',
+          executedByPlayerId: playerId,
+          playerOrder: playerOrderDraft,
+        }),
+      gameState ? 'Partida resetada.' : 'Partida iniciada.',
+    );
+
+  const handleSavePlayerOrder = () =>
+    executeAction(
+      () =>
+        updatePlayerOrder({
+          roomId: currentPlayer?.room_id ?? '',
+          executedByPlayerId: playerId,
+          playerOrder: playerOrderDraft,
+        }),
+      'Ordem dos jogadores salva.',
+    );
+
+  const showDiceOverlayResult = (lastRoll: GameLastRoll) => {
+    setDiceOverlay({
+      isVisible: true,
+      isRolling: false,
+      dice: lastRoll.dice,
+      total: lastRoll.total,
+    });
+
+    window.setTimeout(() => {
+      setDiceOverlay({
+        isVisible: false,
+        isRolling: false,
+        dice: null,
+        total: null,
+      });
+    }, 2000);
+  };
+
+  const handleRollDice = async () => {
+    setIsSubmitting(true);
+    setDiceOverlay({
+      isVisible: true,
+      isRolling: true,
+      dice: null,
+      total: null,
+    });
+
+    try {
+      const lastRoll = await rollDiceForCurrentTurn({
+        roomId: currentPlayer?.room_id ?? '',
+        executedByPlayerId: playerId,
+      });
+
+      showDiceOverlayResult(lastRoll);
+      message.success(lastRoll.message);
+    } catch (error) {
+      setDiceOverlay({
+        isVisible: false,
+        isRolling: false,
+        dice: null,
+        total: null,
+      });
+      message.error(
+        error instanceof GameError
+          ? error.message
+          : 'Não foi possível rolar os dados.',
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmPendingNews = () =>
+    executeAction(
+      () =>
+        confirmPendingNews({
+          roomId: currentPlayer?.room_id ?? '',
+          playerId,
+        }),
+      'Notícia confirmada.',
+    );
   /*
    * Fluxo antigo de Pix direto preservado apenas como referência:
    * moveMoney({ type: 'PLAYER_TO_PLAYER', fromPlayerId: playerId, toPlayerId, amount, reason }).
    * A UI foi retirada porque aluguel, ações e vendas agora usam solicitações persistentes.
    */
-
-  const handlePayBank = (values: MoneyFormValues) =>
-    executeAction(
-      () =>
-        moveMoney({
-          roomId: currentPlayer?.room_id ?? '',
-          type: 'PLAYER_TO_BANK',
-          amount: values.amount ?? 0,
-          fromPlayerId: playerId,
-          toPlayerId: null,
-          executedByPlayerId: playerId,
-          reason: values.reason,
-        }),
-      'Pagamento registrado.',
-    );
 
   const handleBankAction = async (
     type: 'BANK_TO_PLAYER' | 'BANK_CHARGE_PLAYER',
@@ -1231,35 +1647,6 @@ export function GameRoom() {
       'Solicitação de empréstimo enviada.',
     );
 
-  const handleRequestTitlePurchase = (values: TitlePurchaseFormValues) => {
-    const title = getTitleDefinition(values.titleId ?? null);
-
-    if (!title) {
-      message.error('Escolha um título.');
-      return;
-    }
-
-    if ((currentPlayer?.balance ?? 0) < title.purchase_price) {
-      message.error('Saldo insuficiente.');
-      return;
-    }
-
-    if (isDebtPurchaseBlocked) {
-      message.error('Quite seus débitos antes de comprar títulos.');
-      return;
-    }
-
-    void executeAction(
-      () =>
-        requestTitlePurchase({
-          roomId: currentPlayer?.room_id ?? '',
-          playerId,
-          titleId: values.titleId ?? '',
-        }),
-      'Confirmação de compra criada.',
-    );
-  };
-
   const handleUpgradeTitle = (
     purchasedTitleId: string,
     upgrade: 'HOUSE' | 'HOTEL',
@@ -1304,6 +1691,37 @@ export function GameRoom() {
     });
   };
 
+  const handleBuyCurrentPlayerSpace = () => {
+    if (!currentPlayerSpaceTitleDefinition) {
+      return;
+    }
+
+    if (!currentPlayerSpacePurchasedTitle) {
+      void executeAction(
+        () =>
+          requestTitlePurchase({
+            roomId: currentPlayer?.room_id ?? '',
+            playerId,
+            titleId: currentPlayerSpaceTitleDefinition.id,
+          }),
+        'Confirmação de compra criada.',
+      );
+      return;
+    }
+
+    if (
+      currentPlayerSpaceTitleDefinition.kind !== 'LAND' ||
+      currentPlayerSpacePurchasedTitle.owner_player_id !== playerId ||
+      !nextCurrentPlayerSpaceUpgrade
+    ) {
+      return;
+    }
+
+    handleUpgradeTitle(
+      currentPlayerSpacePurchasedTitle.id,
+      nextCurrentPlayerSpaceUpgrade,
+    );
+  };
   const handlePayDebt = async () => {
     if (!debtPaymentModal) {
       return;
@@ -1323,40 +1741,6 @@ export function GameRoom() {
         roundMoney(debtPaymentModal.remaining_amount)
         ? 'Dívida paga.'
         : 'Pagamento parcial registrado.',
-    );
-  };
-
-  const handleCreateCharge = async () => {
-    if (!titleActionModal) {
-      return;
-    }
-
-    const values = await chargeForm.validateFields();
-
-    if (titleActionModal.kind === 'RENT') {
-      await executeAction(
-        () =>
-          createRentChargeRequest({
-            roomId: currentPlayer?.room_id ?? '',
-            ownerPlayerId: playerId,
-            payerPlayerId: values.payerPlayerId ?? '',
-            purchasedTitleId: titleActionModal.purchasedTitle.id,
-          }),
-        'Cobrança de aluguel enviada.',
-      );
-      return;
-    }
-
-    await executeAction(
-      () =>
-        createStockChargeRequest({
-          roomId: currentPlayer?.room_id ?? '',
-          ownerPlayerId: playerId,
-          payerPlayerId: values.payerPlayerId ?? '',
-          purchasedTitleId: titleActionModal.purchasedTitle.id,
-          diceCount: values.diceCount ?? 0,
-        }),
-      'Cobrança de ação enviada.',
     );
   };
 
@@ -1498,9 +1882,10 @@ export function GameRoom() {
     ),
     content: <Space wrap></Space>,
   }));
+
   const navigationItems: GameNavigationItem[] = [
-    { key: 'player', label: 'Principal', icon: <LuWallet /> },
-    { key: 'loans', label: 'Empréstimos', icon: <LuLandmark /> },
+    { key: 'game', label: 'Partida', icon: <LuDices /> },
+    { key: 'loans', label: 'Banco', icon: <LuLandmark /> },
     { key: 'titles', label: 'Títulos', icon: <LuScrollText /> },
     { key: 'ranking', label: 'Ranking', icon: <LuTrophy /> },
     { key: 'history', label: 'Histórico', icon: <LuHistory /> },
@@ -1520,8 +1905,10 @@ export function GameRoom() {
   const activeNavigationLabel =
     activeTabKey === 'calculator'
       ? 'Calculadora'
-      : (navigationItems.find((item) => item.key === activeTabKey)?.label ??
-        'Principal');
+      : activeTabKey === 'checklist'
+        ? 'Checklist'
+        : (navigationItems.find((item) => item.key === activeTabKey)?.label ??
+          'Partida');
 
   const renderDebtParty = (name: string, reason?: string | null) => (
     <Flex vertical gap={2}>
@@ -1632,7 +2019,7 @@ export function GameRoom() {
           `${getPlayerName(
             state?.players ?? [],
             debt.from_player_id,
-          )} → ${getPlayerName(state?.players ?? [], debt.to_player_id)}`,
+          )} ? ${getPlayerName(state?.players ?? [], debt.to_player_id)}`,
           debt.reason,
         ),
     },
@@ -1658,6 +2045,53 @@ export function GameRoom() {
       dataIndex: 'updated_at',
       responsive: ['lg'],
       render: (updatedAt: string) => formatDateTime(updatedAt),
+    },
+  ];
+  const playerOrderColumns: ColumnsType<FirebaseRecord<Player>> = [
+    {
+      title: 'Ordem',
+      key: 'order',
+      width: 72,
+      render: (_, player) => playerOrderDraft.indexOf(player.id) + 1,
+    },
+    {
+      title: 'Jogador',
+      key: 'player',
+      render: (_, player) => (
+        <Space>
+          <Typography.Text>{player.name}</Typography.Text>
+          {gameState?.current_player_id === player.id ? (
+            <Tag color="blue">Vez</Tag>
+          ) : null}
+        </Space>
+      ),
+    },
+    {
+      title: 'Ações',
+      key: 'actions',
+      align: 'right',
+      render: (_, player) => {
+        const orderIndex = playerOrderDraft.indexOf(player.id);
+
+        return (
+          <Space>
+            <Button
+              aria-label="Subir jogador"
+              icon={<LuArrowUp />}
+              disabled={orderIndex <= 0}
+              onClick={() => movePlayerInOrder(player.id, -1)}
+            />
+            <Button
+              aria-label="Descer jogador"
+              icon={<LuArrowDown />}
+              disabled={
+                orderIndex < 0 || orderIndex >= playerOrderDraft.length - 1
+              }
+              onClick={() => movePlayerInOrder(player.id, 1)}
+            />
+          </Space>
+        );
+      },
     },
   ];
   const jailColumns: ColumnsType<FirebaseRecord<Player>> = [
@@ -1854,21 +2288,6 @@ export function GameRoom() {
               </Descriptions>
               <Flex gap={8} wrap="wrap" justify="end">
                 <Button
-                  icon={<LuDices />}
-                  type="primary"
-                  onClick={() => {
-                    chargeForm.resetFields();
-                    setSelectedDiceCount(undefined);
-                    setTitleActionModal({
-                      kind: 'STOCK',
-                      purchasedTitle: title,
-                    });
-                  }}
-                  style={{ flex: 1 }}
-                >
-                  Cobrar ação
-                </Button>
-                <Button
                   onClick={() => {
                     saleForm.resetFields();
                     saleForm.setFieldValue('mode', 'PLAYER');
@@ -1943,49 +2362,6 @@ export function GameRoom() {
             <Divider style={{ margin: '4px 0' }} />
             <Flex gap={8} wrap="wrap" justify="end">
               <Button
-                icon={<LuHouse />}
-                disabled={
-                  isCurrentPlayerJailed ||
-                  isDebtPurchaseBlocked ||
-                  title.has_hotel ||
-                  title.houses >= 4 ||
-                  (currentPlayer?.balance ?? 0) <
-                    definition.acquisition.house_price
-                }
-                loading={isSubmitting}
-                onClick={() => void handleUpgradeTitle(title.id, 'HOUSE')}
-                style={{ flex: 1 }}
-              >
-                Comprar
-              </Button>
-              <Button
-                icon={<LuHotel />}
-                disabled={
-                  isCurrentPlayerJailed ||
-                  isDebtPurchaseBlocked ||
-                  title.has_hotel ||
-                  title.houses !== 4 ||
-                  (currentPlayer?.balance ?? 0) <
-                    definition.acquisition.hotel_price
-                }
-                loading={isSubmitting}
-                onClick={() => void handleUpgradeTitle(title.id, 'HOTEL')}
-                style={{ flex: 1 }}
-              >
-                Comprar
-              </Button>
-              <Button
-                onClick={() => {
-                  chargeForm.resetFields();
-                  setSelectedDiceCount(undefined);
-                  setTitleActionModal({ kind: 'RENT', purchasedTitle: title });
-                }}
-                style={{ flex: 1 }}
-                type="primary"
-              >
-                Cobrar aluguel
-              </Button>
-              <Button
                 onClick={() => {
                   saleForm.resetFields();
                   saleForm.setFieldValue('mode', 'PLAYER');
@@ -2015,18 +2391,25 @@ export function GameRoom() {
           <Button
             aria-label="Voltar ao principal"
             icon={<LuArrowLeft />}
-            onClick={() => setActiveTabKey('player')}
+            onClick={() => setActiveTabKey('game')}
           />
         )
       }
       headerTitle={activeNavigationLabel}
       headerRightAction={
         isNavigatorTab ? (
-          <Button
-            aria-label="Abrir calculadora"
-            icon={<LuCalculator />}
-            onClick={() => setActiveTabKey('calculator')}
-          />
+          <Space size={8}>
+            <Button
+              aria-label="Abrir checklist"
+              icon={<LuCheck />}
+              onClick={() => setActiveTabKey('checklist')}
+            />
+            <Button
+              aria-label="Abrir calculadora"
+              icon={<LuCalculator />}
+              onClick={() => setActiveTabKey('calculator')}
+            />
+          </Space>
         ) : null
       }
     >
@@ -2036,236 +2419,407 @@ export function GameRoom() {
           renderTabBar={() => <></>}
           items={[
             {
-              key: 'player',
-              label: 'Principal',
+              key: 'game',
+              label: 'Partida',
               children: (
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} lg={16}>
-                    <PlayerFinancialSummary
-                      player={currentPlayer}
-                      assetValue={currentPlayerAssetValue}
-                      debtTotal={currentPlayerDebtTotal}
-                      debtStage={currentDebtStage}
-                      isLoading={isLoading}
-                    />
-                  </Col>
+                <Flex vertical gap={16}>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={16}>
+                      <PlayerFinancialSummary
+                        player={currentPlayer}
+                        assetValue={currentPlayerAssetValue}
+                        debtTotal={currentPlayerDebtTotal}
+                        debtStage={currentDebtStage}
+                        isLoading={isLoading}
+                      />
+                    </Col>
+                  </Row>
 
-                  <Col xs={24} lg={12}>
-                    <Card title="Pagar Banco">
-                      <Form
-                        form={bankPaymentForm}
-                        layout="vertical"
-                        requiredMark={false}
-                        onFinish={handlePayBank}
-                      >
-                        <Form.Item
-                          name="reason"
-                          label="Motivo"
-                          rules={[
-                            { required: true, message: 'Escolha o motivo.' },
-                          ]}
-                        >
-                          <Select
-                            allowClear
-                            options={BANK_PAYMENT_REASON_OPTIONS}
-                            placeholder="Selecione o motivo"
-                          />
-                        </Form.Item>
-                        <Form.Item
-                          name="amount"
-                          label="Valor"
-                          rules={[
-                            { required: true, message: 'Informe o valor.' },
-                          ]}
-                        >
-                          <InputNumber
-                            disabled={isBankPaymentAmountLocked}
-                            min={0.01}
-                            precision={2}
-                            style={{ width: '100%' }}
-                            prefix="R$"
-                          />
-                        </Form.Item>
-                        <QuickAmountButtons
-                          form={bankPaymentForm}
-                          disabled={isBankPaymentAmountLocked}
-                        />
-                        <Flex gap={8} justify="end">
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={14}>
+                      <Card title="Controle de partida">
+                        <Flex vertical gap={16}>
+                          {gameState ? (
+                            <Descriptions column={1} size="small" bordered>
+                              <Descriptions.Item label="Rodada atual">
+                                {gameState.round_number}
+                              </Descriptions.Item>
+                              <Descriptions.Item label="Bônus de rodada">
+                                {formatCurrency(gameState.round_bonus_amount)}
+                              </Descriptions.Item>
+                              <Descriptions.Item label="Jogador da vez">
+                                {currentTurnPlayer?.name ?? 'Sem jogador'}
+                              </Descriptions.Item>
+                              {lastRollPlayerName ? (
+                                <Descriptions.Item label="Último jogador">
+                                  {lastRollPlayerName}
+                                </Descriptions.Item>
+                              ) : null}
+                              {gameState.last_roll ? (
+                                <Descriptions.Item label="Última rolagem">
+                                  {gameState.last_roll.dice.join(' + ')} ={' '}
+                                  {gameState.last_roll.total}
+                                </Descriptions.Item>
+                              ) : null}
+                            </Descriptions>
+                          ) : (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message="Partida ainda não iniciada pelo banqueiro."
+                            />
+                          )}
                           <Button
                             type="primary"
-                            htmlType="submit"
-                            loading={isSubmitting}
-                            style={{ flex: 1 }}
+                            size="large"
+                            icon={<LuDices />}
+                            loading={isSubmitting || diceOverlay.isRolling}
+                            disabled={isRollBlocked}
+                            onClick={() => void handleRollDice()}
                           >
-                            Confirmar pagamento
+                            Girar dados
                           </Button>
                         </Flex>
-                      </Form>
-                    </Card>
-                  </Col>
+                      </Card>
+                    </Col>
 
-                  <Col xs={24} lg={12}>
-                    <Card title="Dívidas ativas">
-                      <Table
-                        rowKey="id"
-                        columns={personalDebtColumns}
-                        dataSource={currentPlayerDebts}
-                        pagination={false}
-                      />
-                    </Card>
-                  </Col>
-
-                  <Col xs={24} lg={12}>
-                    <Card title="Valores à receber">
-                      <Table
-                        rowKey="id"
-                        columns={personalReceivableColumns}
-                        dataSource={currentPlayerReceivables}
-                        pagination={false}
-                      />
-                    </Card>
-                  </Col>
-                </Row>
+                    <Col xs={24} lg={10}>
+                      <Card
+                        title={
+                          <Typography.Text style={{ color: '#fff' }} strong>
+                            {currentPlayerSpace.name}
+                          </Typography.Text>
+                        }
+                        styles={{
+                          header: {
+                            background: currentPlayerSpaceColor,
+                            borderBottom: 0,
+                          },
+                        }}
+                      >
+                        {currentPlayerSpacePurchasedTitle &&
+                        currentPlayerSpaceTitleDefinition?.kind === 'LAND' ? (
+                          <Space wrap style={{ marginBottom: 12 }}>
+                            {currentPlayerSpacePurchasedTitle.has_hotel ? (
+                              <LuHotel size={30} aria-label="Hotel comprado" />
+                            ) : (
+                              Array.from(
+                                {
+                                  length:
+                                    currentPlayerSpacePurchasedTitle.houses,
+                                },
+                                (_, index) => (
+                                  <LuHouse
+                                    key={index}
+                                    size={30}
+                                    aria-label={`Casa ${index + 1} comprada`}
+                                  />
+                                ),
+                              )
+                            )}
+                            {!currentPlayerSpacePurchasedTitle.has_hotel &&
+                            currentPlayerSpacePurchasedTitle.houses === 0 ? (
+                              <Tag>Sem melhorias</Tag>
+                            ) : null}
+                          </Space>
+                        ) : null}
+                        <Descriptions column={1} size="small" bordered>
+                          <Descriptions.Item label="Tipo">
+                            {BOARD_SPACE_KIND_LABELS[currentPlayerSpace.kind]}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Status">
+                            {currentPlayerSpaceStatus}
+                          </Descriptions.Item>
+                          {currentPlayerSpace.kind === 'NEWS' && lastNews ? (
+                            <Descriptions.Item label="Notícia">
+                              <Typography.Text style={{ color: lastNewsColor }}>
+                                {lastNews.card.action}{' '}
+                                <Typography.Text
+                                  strong
+                                  style={{ color: lastNewsColor }}
+                                >
+                                  ({formatCurrency(lastNews.card.amount)})
+                                </Typography.Text>
+                              </Typography.Text>
+                            </Descriptions.Item>
+                          ) : null}
+                          {currentPlayerSpacePurchasedTitle &&
+                          currentPlayerSpaceTitleDefinition?.kind === 'LAND' ? (
+                            <Descriptions.Item label="Aluguel atual">
+                              {formatCurrency(
+                                getLandChargeAmount(
+                                  currentPlayerSpacePurchasedTitle,
+                                ),
+                              )}
+                            </Descriptions.Item>
+                          ) : null}
+                          {currentPlayerSpacePurchasedTitle &&
+                          currentPlayerSpaceTitleDefinition?.kind ===
+                            'STOCK' ? (
+                            <Descriptions.Item label="Cobrança da ação">
+                              {formatCurrency(
+                                currentPlayerSpaceTitleDefinition.multiplier,
+                              )}{' '}
+                              por ponto dos dados
+                            </Descriptions.Item>
+                          ) : null}
+                        </Descriptions>
+                        {currentPlayerSpaceTitleDefinition &&
+                        !currentPlayerSpacePurchasedTitle ? (
+                          <Button
+                            type="primary"
+                            block
+                            loading={isSubmitting}
+                            disabled={!canBuyCurrentPlayerSpaceTitle}
+                            onClick={handleBuyCurrentPlayerSpace}
+                            style={{ marginTop: 12 }}
+                          >
+                            Comprar por{' '}
+                            {formatCurrency(
+                              currentPlayerSpaceTitleDefinition.purchase_price,
+                            )}
+                          </Button>
+                        ) : null}
+                        {currentPlayerSpaceTitleDefinition?.kind === 'LAND' &&
+                        currentPlayerSpacePurchasedTitle?.owner_player_id ===
+                          playerId &&
+                        !currentPlayerSpacePurchasedTitle.has_hotel ? (
+                          <Button
+                            type="primary"
+                            block
+                            loading={isSubmitting}
+                            disabled={!canPayCurrentPlayerSpaceUpgrade}
+                            onClick={handleBuyCurrentPlayerSpace}
+                            style={{ marginTop: 12 }}
+                          >
+                            {nextCurrentPlayerSpaceUpgrade === 'HOUSE'
+                              ? 'Comprar casa'
+                              : 'Comprar hotel'}{' '}
+                            por{' '}
+                            {formatCurrency(currentPlayerSpaceUpgradeAmount)}
+                          </Button>
+                        ) : null}
+                      </Card>
+                    </Col>
+                  </Row>
+                </Flex>
               ),
             },
             {
               key: 'loans',
-              label: 'Empréstimos',
+              label: 'Banco',
               children: (
-                <Row gutter={[16, 16]}>
-                  <Col xs={24} lg={16}>
-                    <PlayerFinancialSummary
-                      player={currentPlayer}
-                      assetValue={currentPlayerAssetValue}
-                      debtTotal={currentPlayerDebtTotal}
-                      debtStage={currentDebtStage}
-                      isLoading={isLoading}
-                    />
-                  </Col>
-                  <Col xs={24} lg={10}>
-                    <Card title="Empréstimo do banco">
-                      <Flex vertical gap={12}>
-                        <Descriptions column={1} size="small" bordered>
-                          <Descriptions.Item label="Patrimônio + Saldo">
-                            {formatCurrency(currentPlayerNetWorth)}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Valor disponível">
-                            {formatCurrency(bankLoanAmount)}
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Juros">
-                            {BANK_LOAN_INTEREST_RATE}%
-                          </Descriptions.Item>
-                          <Descriptions.Item label="Total da dívida">
-                            {formatCurrency(bankLoanDebtAmount)}
-                          </Descriptions.Item>
-                        </Descriptions>
-                        {currentPlayerDebtTotal > 0 ? (
-                          <Alert
-                            type="warning"
-                            showIcon
-                            title="Quite suas dívidas ativas antes de pedir empréstimo."
-                          />
-                        ) : null}
-                        <Button
-                          type="primary"
-                          disabled={currentPlayerDebtTotal > 0}
-                          loading={isSubmitting}
-                          onClick={() => void handleCreateBankLoan()}
-                        >
-                          Solicitar empréstimo
-                        </Button>
-                      </Flex>
-                    </Card>
-                  </Col>
-                  <Col xs={24} lg={10}>
-                    <Card title="Empréstimo com jogadores">
-                      <Form
-                        form={playerLoanForm}
-                        layout="vertical"
-                        requiredMark={false}
-                        onFinish={handleCreatePlayerLoanRequest}
-                      >
-                        <Form.Item
-                          name="creditorPlayerId"
-                          label="Jogador credor"
-                          rules={[
-                            { required: true, message: 'Escolha o credor.' },
-                          ]}
-                        >
-                          <Select
-                            options={playerOptions}
-                            placeholder="Selecione um jogador"
-                          />
-                        </Form.Item>
-                        <Form.Item
-                          name="requestedAmount"
-                          label="Valor solicitado"
-                          rules={[
-                            { required: true, message: 'Informe o valor.' },
-                          ]}
-                        >
-                          <InputNumber
-                            min={1}
-                            precision={2}
-                            style={{ width: '100%' }}
-                            prefix="R$"
-                          />
-                        </Form.Item>
-                        <Row gutter={12}>
-                          <Col xs={12}>
-                            <Form.Item
-                              name="interestRate"
-                              label="Taxa de juros"
-                              rules={[
-                                {
-                                  required: true,
-                                  message: 'Informe a taxa de juros.',
-                                },
-                              ]}
-                            >
-                              <InputNumber
-                                min={0}
-                                precision={2}
-                                style={{ width: '100%' }}
-                                suffix="%"
+                <Flex vertical gap={16}>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={16}>
+                      <PlayerFinancialSummary
+                        player={currentPlayer}
+                        assetValue={currentPlayerAssetValue}
+                        debtTotal={currentPlayerDebtTotal}
+                        debtStage={currentDebtStage}
+                        isLoading={isLoading}
+                      />
+                    </Col>
+                  </Row>
+                  <Tabs
+                    defaultActiveKey="request"
+                    items={[
+                      {
+                        key: 'request',
+                        label: 'Empréstimos',
+                        children: (
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} lg={10}>
+                              <Card title="Empréstimo do banco">
+                                <Flex vertical gap={12}>
+                                  <Descriptions
+                                    column={1}
+                                    size="small"
+                                    bordered
+                                  >
+                                    <Descriptions.Item label="Patrimônio + Saldo">
+                                      {formatCurrency(currentPlayerNetWorth)}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Valor disponível">
+                                      {formatCurrency(bankLoanAmount)}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Juros">
+                                      {BANK_LOAN_INTEREST_RATE}%
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Total da dívida">
+                                      {formatCurrency(bankLoanDebtAmount)}
+                                    </Descriptions.Item>
+                                  </Descriptions>
+                                  {currentPlayerDebtTotal > 0 ? (
+                                    <Alert
+                                      type="warning"
+                                      showIcon
+                                      title="Quite suas dívidas ativas antes de pedir empréstimo."
+                                    />
+                                  ) : null}
+                                  <Button
+                                    type="primary"
+                                    disabled={currentPlayerDebtTotal > 0}
+                                    loading={isSubmitting}
+                                    onClick={() => void handleCreateBankLoan()}
+                                  >
+                                    Solicitar empréstimo
+                                  </Button>
+                                </Flex>
+                              </Card>
+                            </Col>
+                            <Col xs={24} lg={10}>
+                              <Card title="Empréstimo com jogadores">
+                                <Form
+                                  form={playerLoanForm}
+                                  layout="vertical"
+                                  requiredMark={false}
+                                  onFinish={handleCreatePlayerLoanRequest}
+                                >
+                                  <Form.Item
+                                    name="creditorPlayerId"
+                                    label="Jogador credor"
+                                    rules={[
+                                      {
+                                        required: true,
+                                        message: 'Escolha o credor.',
+                                      },
+                                    ]}
+                                  >
+                                    <Select
+                                      options={playerOptions}
+                                      placeholder="Selecione um jogador"
+                                    />
+                                  </Form.Item>
+                                  <Form.Item
+                                    name="requestedAmount"
+                                    label="Valor solicitado"
+                                    rules={[
+                                      {
+                                        required: true,
+                                        message: 'Informe o valor.',
+                                      },
+                                    ]}
+                                  >
+                                    <InputNumber
+                                      min={1}
+                                      precision={2}
+                                      style={{ width: '100%' }}
+                                      prefix="R$"
+                                    />
+                                  </Form.Item>
+                                  <Row gutter={12}>
+                                    <Col xs={12}>
+                                      <Form.Item
+                                        name="interestRate"
+                                        label="Taxa de juros"
+                                        rules={[
+                                          {
+                                            required: true,
+                                            message: 'Informe a taxa de juros.',
+                                          },
+                                        ]}
+                                      >
+                                        <InputNumber
+                                          min={0}
+                                          precision={2}
+                                          style={{ width: '100%' }}
+                                          suffix="%"
+                                        />
+                                      </Form.Item>
+                                    </Col>
+                                    <Col xs={12}>
+                                      <Form.Item
+                                        name="repaymentAmount"
+                                        label="Total a pagar"
+                                        rules={[
+                                          {
+                                            required: true,
+                                            message: 'Informe o valor a pagar.',
+                                          },
+                                        ]}
+                                      >
+                                        <InputNumber
+                                          disabled
+                                          min={1}
+                                          precision={2}
+                                          style={{ width: '100%' }}
+                                          prefix="R$"
+                                        />
+                                      </Form.Item>
+                                    </Col>
+                                  </Row>
+                                  <Flex>
+                                    <Button
+                                      type="primary"
+                                      htmlType="submit"
+                                      loading={isSubmitting}
+                                      style={{ flex: 1 }}
+                                    >
+                                      Pedir empréstimo
+                                    </Button>
+                                  </Flex>
+                                </Form>
+                              </Card>
+                            </Col>
+                          </Row>
+                        ),
+                      },
+                      {
+                        key: 'pending',
+                        label: 'Pendências',
+                        children: (
+                          <Flex vertical gap={16}>
+                            {currentPlayerDebts.length > 0 ? (
+                              <Alert
+                                type="warning"
+                                message={
+                                  <Flex
+                                    align="center"
+                                    justify="space-between"
+                                    gap={12}
+                                  >
+                                    <Typography.Text strong>
+                                      Você possui dívidas ativas.
+                                    </Typography.Text>
+                                    <LuTriangleAlert
+                                      aria-label="Alerta de dívida ativa"
+                                      color="#d48806"
+                                      size={20}
+                                    />
+                                  </Flex>
+                                }
                               />
-                            </Form.Item>
-                          </Col>
-                          <Col xs={12}>
-                            <Form.Item
-                              name="repaymentAmount"
-                              label="Total a pagar"
-                              rules={[
-                                {
-                                  required: true,
-                                  message: 'Informe o valor a pagar.',
-                                },
-                              ]}
-                            >
-                              <InputNumber
-                                disabled
-                                min={1}
-                                precision={2}
-                                style={{ width: '100%' }}
-                                prefix="R$"
-                              />
-                            </Form.Item>
-                          </Col>
-                        </Row>
-                        <Flex>
-                          <Button
-                            type="primary"
-                            htmlType="submit"
-                            loading={isSubmitting}
-                            style={{ flex: 1 }}
-                          >
-                            Pedir empréstimo
-                          </Button>
-                        </Flex>
-                      </Form>
-                    </Card>
-                  </Col>
-                </Row>
+                            ) : null}
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} lg={12}>
+                                <Card title="Dívidas ativas">
+                                  <Table
+                                    rowKey="id"
+                                    columns={personalDebtColumns}
+                                    dataSource={currentPlayerDebts}
+                                    pagination={false}
+                                  />
+                                </Card>
+                              </Col>
+
+                              <Col xs={24} lg={12}>
+                                <Card title="Valores à receber">
+                                  <Table
+                                    rowKey="id"
+                                    columns={personalReceivableColumns}
+                                    dataSource={currentPlayerReceivables}
+                                    pagination={false}
+                                  />
+                                </Card>
+                              </Col>
+                            </Row>
+                          </Flex>
+                        ),
+                      },
+                    ]}
+                  />
+                </Flex>
               ),
             },
             {
@@ -2298,82 +2852,6 @@ export function GameRoom() {
                       }
                     />
                   ) : null}
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={12}>
-                      <Card title="Aquisição de títulos">
-                        <Form
-                          form={titlePurchaseForm}
-                          layout="vertical"
-                          requiredMark={false}
-                          onFinish={handleRequestTitlePurchase}
-                        >
-                          <Form.Item
-                            name="titleId"
-                            label="Título"
-                            rules={[
-                              {
-                                required: true,
-                                message: 'Escolha o título.',
-                              },
-                            ]}
-                          >
-                            <Select
-                              showSearch
-                              optionFilterProp="searchText"
-                              options={availableTitleOptions}
-                              placeholder="Buscar por nome do título"
-                              onChange={(value) => setSelectedTitleId(value)}
-                              filterOption={(input, option) =>
-                                String(option?.searchText ?? '').includes(
-                                  normalizeSearchText(input),
-                                )
-                              }
-                            />
-                          </Form.Item>
-                          {selectedTitle ? (
-                            <Alert
-                              type={
-                                isDebtPurchaseBlocked ||
-                                isCurrentPlayerJailed ||
-                                (currentPlayer?.balance ?? 0) <
-                                  selectedTitle.purchase_price
-                                  ? 'error'
-                                  : 'info'
-                              }
-                              showIcon
-                              title={`${selectedTitle.name} - ${formatCurrency(
-                                selectedTitle.purchase_price,
-                              )}`}
-                              description={
-                                isCurrentPlayerJailed
-                                  ? 'Você está preso e não pode comprar títulos.'
-                                  : isDebtPurchaseBlocked
-                                    ? 'Quite seus débitos antes de comprar títulos.'
-                                    : (currentPlayer?.balance ?? 0) >=
-                                        selectedTitle.purchase_price
-                                      ? 'Depois de pedir, confirme a compra para ganhar o título.'
-                                      : 'Saldo insuficiente.'
-                              }
-                              style={{ marginBottom: 16 }}
-                            />
-                          ) : null}
-                          <Flex justify="end">
-                            <Button
-                              type="primary"
-                              htmlType="submit"
-                              disabled={
-                                isCurrentPlayerJailed || isDebtPurchaseBlocked
-                              }
-                              loading={isSubmitting}
-                              style={{ flex: 1 }}
-                            >
-                              Comprar título
-                            </Button>
-                          </Flex>
-                        </Form>
-                      </Card>
-                    </Col>
-                  </Row>
                   <Card title="Títulos comprados">
                     {currentPlayerTitles.length > 0 ? (
                       <Row gutter={[16, 16]}>
@@ -2407,6 +2885,11 @@ export function GameRoom() {
                   </Col>
                 </Row>
               ),
+            },
+            {
+              key: 'checklist',
+              label: 'Checklist',
+              children: <ChecklistPage storageKey={checklistStorageKey} />,
             },
             {
               key: 'calculator',
@@ -2534,6 +3017,42 @@ export function GameRoom() {
                               dataSource={state?.players ?? []}
                               pagination={false}
                             />
+                          </Card>
+                        </Col>
+
+                        <Col xs={24} lg={10}>
+                          <Card title="Ordem dos jogadores">
+                            <Flex vertical gap={12}>
+                              <Table
+                                rowKey="id"
+                                size="small"
+                                columns={playerOrderColumns}
+                                dataSource={orderedPlayers}
+                                pagination={false}
+                              />
+                              <Flex gap={8} wrap="wrap">
+                                <Button
+                                  type="primary"
+                                  icon={<LuPlay />}
+                                  loading={isSubmitting}
+                                  onClick={handleStartGameState}
+                                  style={{ flex: 1 }}
+                                >
+                                  {gameState
+                                    ? 'Resetar partida'
+                                    : 'Iniciar partida'}
+                                </Button>
+                                <Button
+                                  icon={<LuSave />}
+                                  loading={isSubmitting}
+                                  disabled={!gameState}
+                                  onClick={handleSavePlayerOrder}
+                                  style={{ flex: 1 }}
+                                >
+                                  Salvar ordem
+                                </Button>
+                              </Flex>
+                            </Flex>
                           </Card>
                         </Col>
 
@@ -2738,6 +3257,105 @@ export function GameRoom() {
         </Flex>
       ) : null}
 
+      {diceOverlay.isVisible ? (
+        <Flex
+          vertical
+          align="center"
+          justify="center"
+          gap={20}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1200,
+            background: 'rgba(0, 0, 0, 0.42)',
+            backdropFilter: 'blur(4px)',
+            pointerEvents: 'none',
+          }}
+        >
+          <style>{`
+            @keyframes dice-spin {
+              from { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+              to { transform: rotateX(720deg) rotateY(540deg) rotateZ(360deg); }
+            }
+          `}</style>
+          <Flex gap={18}>
+            {[0, 1].map((diceIndex) => (
+              <Flex
+                key={diceIndex}
+                align="center"
+                justify="center"
+                style={{
+                  width: 82,
+                  height: 82,
+                  borderRadius: 14,
+                  background: '#fff',
+                  color: '#d81860',
+                  fontSize: 34,
+                  fontWeight: 800,
+                  boxShadow: '0 18px 50px rgba(0, 0, 0, 0.34)',
+                  transformStyle: 'preserve-3d',
+                  animation: diceOverlay.isRolling
+                    ? 'dice-spin 0.7s linear infinite'
+                    : 'none',
+                }}
+              >
+                {diceOverlay.dice?.[diceIndex] ?? '?'}
+              </Flex>
+            ))}
+          </Flex>
+          <Typography.Title level={3} style={{ margin: 0, color: '#fff' }}>
+            {diceOverlay.isRolling
+              ? 'Girando dados...'
+              : `Resultado: ${diceOverlay.total}`}
+          </Typography.Title>
+        </Flex>
+      ) : null}
+
+      <Modal
+        open={Boolean(pendingNewsForCurrentPlayer)}
+        title="Notícia"
+        mask={{ closable: false }}
+        keyboard={false}
+        closable={false}
+        footer={
+          <Button
+            type="primary"
+            loading={isSubmitting}
+            onClick={handleConfirmPendingNews}
+          >
+            Ok
+          </Button>
+        }
+      >
+        {pendingNewsForCurrentPlayer ? (
+          <Flex vertical gap={8} align="center" style={{ textAlign: 'center' }}>
+            <Typography.Text
+              strong
+              style={{
+                color:
+                  pendingNewsForCurrentPlayer.card.type === 'LUCK'
+                    ? '#237804'
+                    : '#cf1322',
+                fontSize: 18,
+              }}
+            >
+              {pendingNewsForCurrentPlayer.card.action}
+            </Typography.Text>
+            <Typography.Text
+              strong
+              style={{
+                color:
+                  pendingNewsForCurrentPlayer.card.type === 'LUCK'
+                    ? '#237804'
+                    : '#cf1322',
+                fontSize: 24,
+              }}
+            >
+              {formatCurrency(pendingNewsForCurrentPlayer.card.amount)}
+            </Typography.Text>
+          </Flex>
+        ) : null}
+      </Modal>
       <Modal
         open={Boolean(activePendingRequest)}
         title={getPendingRequestTitle()}
@@ -2903,186 +3521,117 @@ export function GameRoom() {
 
       <Modal
         open={Boolean(titleActionModal)}
-        title={
-          titleActionModal?.kind === 'SALE'
-            ? 'Vender título'
-            : titleActionModal?.kind === 'STOCK'
-              ? 'Cobrar ação'
-              : 'Cobrar aluguel'
-        }
+        title="Vender título"
         onCancel={() => setTitleActionModal(null)}
         footer={
-          titleActionModal?.kind === 'SALE' ? (
-            <Space>
-              <Button onClick={() => setTitleActionModal(null)}>
-                Cancelar
-              </Button>
-              <Button
-                type="primary"
-                loading={isSubmitting}
-                onClick={() => void handleCreateTitleSale()}
-              >
-                {saleMode === 'BANK' ? 'Vender ao banco' : 'Enviar proposta'}
-              </Button>
-            </Space>
-          ) : (
-            <Space>
-              <Button onClick={() => setTitleActionModal(null)}>
-                Cancelar
-              </Button>
-              <Button
-                type="primary"
-                loading={isSubmitting}
-                onClick={() => void handleCreateCharge()}
-              >
-                Enviar cobrança
-              </Button>
-            </Space>
-          )
+          <Space>
+            <Button onClick={() => setTitleActionModal(null)}>Cancelar</Button>
+            <Button
+              type="primary"
+              loading={isSubmitting}
+              onClick={() => void handleCreateTitleSale()}
+            >
+              {saleMode === 'BANK' ? 'Vender ao banco' : 'Enviar proposta'}
+            </Button>
+          </Space>
         }
       >
-        {titleActionModal?.kind === 'SALE' ? (
-          <Form
-            form={saleForm}
-            layout="vertical"
-            requiredMark={false}
-            initialValues={{ mode: 'PLAYER' }}
-          >
-            {selectedSaleValuation ? (
-              <Flex vertical gap={12} style={{ marginBottom: 16 }}>
-                <Descriptions column={1} size="small" bordered>
-                  <Descriptions.Item label="Título">
-                    {selectedSaleValuation.definition.name}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Tipo">
-                    {selectedSaleValuation.definition.kind === 'LAND'
-                      ? 'Terreno'
-                      : 'Ação'}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Valor base">
-                    {formatCurrency(selectedSaleValuation.baseValue)}
-                  </Descriptions.Item>
-                  {selectedSaleValuation.improvements.length > 0 ? (
-                    selectedSaleValuation.improvements.map((improvement) => (
-                      <Descriptions.Item
-                        key={improvement.label}
-                        label={improvement.label}
-                      >
-                        {formatCurrency(improvement.amount)}
-                      </Descriptions.Item>
-                    ))
-                  ) : (
-                    <Descriptions.Item label="Valores agregados">
-                      Sem melhorias
+        <Form
+          form={saleForm}
+          layout="vertical"
+          requiredMark={false}
+          initialValues={{ mode: 'PLAYER' }}
+        >
+          {selectedSaleValuation ? (
+            <Flex vertical gap={12} style={{ marginBottom: 16 }}>
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="Título">
+                  {selectedSaleValuation.definition.name}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tipo">
+                  {selectedSaleValuation.definition.kind === 'LAND'
+                    ? 'Terreno'
+                    : 'Ação'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Valor base">
+                  {formatCurrency(selectedSaleValuation.baseValue)}
+                </Descriptions.Item>
+                {selectedSaleValuation.improvements.length > 0 ? (
+                  selectedSaleValuation.improvements.map((improvement) => (
+                    <Descriptions.Item
+                      key={improvement.label}
+                      label={improvement.label}
+                    >
+                      {formatCurrency(improvement.amount)}
                     </Descriptions.Item>
-                  )}
-                  <Descriptions.Item label="Valor estimado">
-                    <Typography.Text strong>
-                      {formatCurrency(selectedSaleValuation.totalValue)}
-                    </Typography.Text>
+                  ))
+                ) : (
+                  <Descriptions.Item label="Valores agregados">
+                    Sem melhorias
                   </Descriptions.Item>
-                  <Descriptions.Item label="Banco paga 75%">
-                    <Typography.Text type="success" strong>
-                      {formatCurrency(selectedSaleValuation.bankSaleValue)}
-                    </Typography.Text>
-                  </Descriptions.Item>
-                </Descriptions>
-              </Flex>
-            ) : null}
-            <Form.Item name="mode" label="Destino da venda">
-              <Radio.Group
-                optionType="button"
-                buttonStyle="solid"
-                options={[
-                  { label: 'Outro jogador', value: 'PLAYER' },
-                  { label: 'Banco', value: 'BANK' },
-                ]}
-              />
-            </Form.Item>
-            <Form.Item
-              name="buyerPlayerId"
-              label="Comprador"
-              rules={[
-                {
-                  validator: (_, value?: string) => {
-                    if (saleMode === 'BANK' || value) {
-                      return Promise.resolve();
-                    }
-
-                    return Promise.reject(new Error('Escolha o comprador.'));
-                  },
-                },
+                )}
+                <Descriptions.Item label="Valor estimado">
+                  <Typography.Text strong>
+                    {formatCurrency(selectedSaleValuation.totalValue)}
+                  </Typography.Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Banco paga 75%">
+                  <Typography.Text type="success" strong>
+                    {formatCurrency(selectedSaleValuation.bankSaleValue)}
+                  </Typography.Text>
+                </Descriptions.Item>
+              </Descriptions>
+            </Flex>
+          ) : null}
+          <Form.Item name="mode" label="Destino da venda">
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              options={[
+                { label: 'Outro jogador', value: 'PLAYER' },
+                { label: 'Banco', value: 'BANK' },
               ]}
-            >
-              <Select
-                disabled={saleMode === 'BANK'}
-                options={playerOptions}
-                placeholder="Selecione um jogador"
-              />
-            </Form.Item>
-            <Form.Item
-              name="amount"
-              label={
-                saleMode === 'BANK'
-                  ? 'Valor pago pelo banco'
-                  : 'Valor da proposta'
-              }
-              rules={[{ required: true, message: 'Informe o valor.' }]}
-            >
-              <InputNumber
-                disabled={saleMode === 'BANK'}
-                min={1}
-                precision={2}
-                style={{ width: '100%' }}
-                prefix="R$"
-              />
-            </Form.Item>
-          </Form>
-        ) : (
-          <Form form={chargeForm} layout="vertical" requiredMark={false}>
-            <Form.Item
-              name="payerPlayerId"
-              label="Jogador que irá pagar"
-              rules={[{ required: true, message: 'Escolha o jogador.' }]}
-            >
-              <Select
-                options={playerOptions}
-                placeholder="Selecione um jogador"
-              />
-            </Form.Item>
-            {titleActionModal?.kind === 'STOCK' ? (
-              <>
-                <Form.Item
-                  name="diceCount"
-                  label="Número dos dados"
-                  rules={[{ required: true, message: 'Escolha os dados.' }]}
-                >
-                  <Select
-                    options={DICE_OPTIONS}
-                    placeholder="Selecione de 1 a 12"
-                    onChange={(value) => setSelectedDiceCount(value)}
-                  />
-                </Form.Item>
-                <Form.Item label="Valor a cobrar">
-                  <InputNumber
-                    disabled
-                    value={selectedStockChargeAmount}
-                    style={{ width: '100%' }}
-                    prefix="R$"
-                  />
-                </Form.Item>
-              </>
-            ) : titleActionModal?.purchasedTitle ? (
-              <Alert
-                type="info"
-                showIcon
-                title={`Valor do aluguel: ${formatCurrency(
-                  getLandChargeAmount(titleActionModal.purchasedTitle),
-                )}`}
-              />
-            ) : null}
-          </Form>
-        )}
+            />
+          </Form.Item>
+          <Form.Item
+            name="buyerPlayerId"
+            label="Comprador"
+            rules={[
+              {
+                validator: (_, value?: string) => {
+                  if (saleMode === 'BANK' || value) {
+                    return Promise.resolve();
+                  }
+
+                  return Promise.reject(new Error('Escolha o comprador.'));
+                },
+              },
+            ]}
+          >
+            <Select
+              disabled={saleMode === 'BANK'}
+              options={playerOptions}
+              placeholder="Selecione um jogador"
+            />
+          </Form.Item>
+          <Form.Item
+            name="amount"
+            label={
+              saleMode === 'BANK'
+                ? 'Valor pago pelo banco'
+                : 'Valor da proposta'
+            }
+            rules={[{ required: true, message: 'Informe o valor.' }]}
+          >
+            <InputNumber
+              disabled={saleMode === 'BANK'}
+              min={1}
+              precision={2}
+              style={{ width: '100%' }}
+              prefix="R$"
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </AppLayout>
   );
