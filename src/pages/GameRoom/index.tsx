@@ -83,6 +83,7 @@ import type {
   PurchasedTitle,
   Transaction,
 } from '@/types/game';
+import { isBlockingDebtForTitlePurchase } from '@/utils/debts';
 import { formatCurrency } from '@/utils/formatters';
 
 type MoneyFormValues = {
@@ -698,6 +699,18 @@ export function GameRoom() {
     [currentPlayerDebts],
   );
 
+  const hasBlockingDebtForTitlePurchase = useMemo(
+    () =>
+      currentPlayerDebts.some((debt) =>
+        isBlockingDebtForTitlePurchase(
+          debt,
+          currentPlayer?.room_id ?? '',
+          playerId ?? '',
+        ),
+      ),
+    [currentPlayer?.room_id, currentPlayerDebts, playerId],
+  );
+
   const currentPlayerReceivableTotal = useMemo(
     () =>
       currentPlayerReceivables.reduce(
@@ -973,8 +986,10 @@ export function GameRoom() {
       return;
     }
 
-    if (currentPlayerDebtTotal > 0) {
-      message.error('Quite suas dívidas ativas antes de comprar títulos.');
+    if (hasBlockingDebtForTitlePurchase) {
+      message.error(
+        'Quite suas dívidas com jogadores antes de comprar títulos.',
+      );
       return;
     }
 
@@ -1922,7 +1937,7 @@ export function GameRoom() {
                           {selectedTitle ? (
                             <Alert
                               type={
-                                currentPlayerDebtTotal > 0 ||
+                                hasBlockingDebtForTitlePurchase ||
                                 (currentPlayer?.balance ?? 0) <
                                   selectedTitle.purchase_price
                                   ? 'error'
@@ -1933,8 +1948,8 @@ export function GameRoom() {
                                 selectedTitle.purchase_price,
                               )}`}
                               description={
-                                currentPlayerDebtTotal > 0
-                                  ? 'Quite suas dívidas ativas antes de comprar títulos.'
+                                hasBlockingDebtForTitlePurchase
+                                  ? 'Quite suas dívidas com jogadores antes de comprar títulos.'
                                   : (currentPlayer?.balance ?? 0) >=
                                       selectedTitle.purchase_price
                                     ? 'Depois de pedir, confirme a compra para ganhar o título.'
@@ -1947,7 +1962,7 @@ export function GameRoom() {
                             <Button
                               type="primary"
                               htmlType="submit"
-                              disabled={currentPlayerDebtTotal > 0}
+                              disabled={hasBlockingDebtForTitlePurchase}
                               loading={isSubmitting}
                               style={{ flex: 1 }}
                             >

@@ -19,6 +19,7 @@ import type {
   Transaction,
   TransactionType,
 } from '@/types/game';
+import { isBlockingDebtForTitlePurchase } from '@/utils/debts';
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
@@ -516,14 +517,13 @@ const assertNoActiveDebtForTitlePurchase = async (
 ) => {
   const debts = await listRecords<Debt>('debts');
   const hasActiveDebt = debts.some(
-    (debt) =>
-      debt.room_id === roomId &&
-      debt.from_player_id === playerId &&
-      debt.remaining_amount > 0,
+    (debt) => isBlockingDebtForTitlePurchase(debt, roomId, playerId),
   );
 
   if (hasActiveDebt) {
-    throw new GameError('Quite suas dívidas ativas antes de comprar títulos.');
+    throw new GameError(
+      'Quite suas dívidas com jogadores antes de comprar títulos.',
+    );
   }
 };
 
