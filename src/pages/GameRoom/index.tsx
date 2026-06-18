@@ -687,8 +687,7 @@ export function GameRoom() {
     useState<TitleActionModal>(null);
   const [debtPaymentModal, setDebtPaymentModal] =
     useState<DebtPaymentModal>(null);
-  const [isCancelChargeModalOpen, setIsCancelChargeModalOpen] =
-    useState(false);
+  const [isCancelChargeModalOpen, setIsCancelChargeModalOpen] = useState(false);
   const [activeTabKey, setActiveTabKey] = useState<GameTabKey>('player');
   const [selectedTitleId, setSelectedTitleId] = useState<string>();
   const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
@@ -784,15 +783,14 @@ export function GameRoom() {
       return;
     }
 
-    const newReceivedPixTransactions = state.transactions.filter(
+    const newReceivedTransactions = state.transactions.filter(
       (transaction) =>
         !seenTransactionIdsRef.current.has(transaction.id) &&
-        transaction.type === 'PLAYER_TO_PLAYER' &&
         transaction.to_player_id === playerId &&
-        transaction.executed_by_player_id !== playerId,
+        transaction.amount > 0,
     );
 
-    newReceivedPixTransactions.forEach((transaction) => {
+    newReceivedTransactions.forEach((transaction) => {
       playPixAudio();
 
       notification.success({
@@ -931,8 +929,7 @@ export function GameRoom() {
     currentPlayerDebtTotal,
     currentPlayerAssetValue,
   );
-  const isDebtPurchaseBlocked =
-    isDebtStageBlockingPurchases(currentDebtStage);
+  const isDebtPurchaseBlocked = isDebtStageBlockingPurchases(currentDebtStage);
   const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
   const isTitlesTabAvailableWhileRestricted = activeTabKey === 'titles';
   const shouldShowJailBackdrop =
@@ -945,7 +942,10 @@ export function GameRoom() {
     !shouldShowJailBackdrop;
   const maxDebtPaymentAmount = debtPaymentModal
     ? roundMoney(
-        Math.min(debtPaymentModal.remaining_amount, currentPlayer?.balance ?? 0),
+        Math.min(
+          debtPaymentModal.remaining_amount,
+          currentPlayer?.balance ?? 0,
+        ),
       )
     : 0;
   const isDebtPaymentAmountInvalid =
@@ -1006,7 +1006,12 @@ export function GameRoom() {
       saleForm.setFieldValue('amount', selectedSaleValuation?.bankSaleValue);
       saleForm.setFieldValue('buyerPlayerId', undefined);
     }
-  }, [saleForm, saleMode, selectedSaleValuation?.bankSaleValue, titleActionModal]);
+  }, [
+    saleForm,
+    saleMode,
+    selectedSaleValuation?.bankSaleValue,
+    titleActionModal,
+  ]);
 
   if (!code || !playerId) {
     return <Navigate to="/" replace />;
@@ -1616,7 +1621,7 @@ export function GameRoom() {
                     debt.reason,
                   ),
               }
-          : column,
+            : column,
       );
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
@@ -1935,6 +1940,7 @@ export function GameRoom() {
                 {formatCurrency(definition.receivables.hotel)}
               </Descriptions.Item>
             </Descriptions>
+            <Divider style={{ margin: '4px 0' }} />
             <Flex gap={8} wrap="wrap" justify="end">
               <Button
                 icon={<LuHouse />}
@@ -2846,11 +2852,7 @@ export function GameRoom() {
                 {formatCurrency(currentPlayer?.balance ?? 0)}
               </Descriptions.Item>
             </Descriptions>
-            <Form
-              form={debtPaymentForm}
-              layout="vertical"
-              requiredMark={false}
-            >
+            <Form form={debtPaymentForm} layout="vertical" requiredMark={false}>
               <Form.Item
                 name="amount"
                 label="Valor a pagar"
@@ -3007,9 +3009,7 @@ export function GameRoom() {
                       return Promise.resolve();
                     }
 
-                    return Promise.reject(
-                      new Error('Escolha o comprador.'),
-                    );
+                    return Promise.reject(new Error('Escolha o comprador.'));
                   },
                 },
               ]}
@@ -3022,7 +3022,11 @@ export function GameRoom() {
             </Form.Item>
             <Form.Item
               name="amount"
-              label={saleMode === 'BANK' ? 'Valor pago pelo banco' : 'Valor da proposta'}
+              label={
+                saleMode === 'BANK'
+                  ? 'Valor pago pelo banco'
+                  : 'Valor da proposta'
+              }
               rules={[{ required: true, message: 'Informe o valor.' }]}
             >
               <InputNumber
