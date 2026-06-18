@@ -1275,6 +1275,7 @@ export const rollDiceForCurrentTurn = async ({
   }
 
   const advance = advanceBoardPosition(fromPosition, diceTotal);
+  fromPosition = advance.fromPosition;
   toPosition = advance.toPosition;
   nextGameState.positions_by_player_id = {
     ...nextGameState.positions_by_player_id,
