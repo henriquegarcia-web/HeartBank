@@ -22,7 +22,6 @@ import type {
   Transaction,
   TransactionType,
 } from '@/types/game';
-import { isBlockingDebtForTitlePurchase } from '@/utils/debts';
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
@@ -514,22 +513,6 @@ const assertTitleAvailable = async (roomId: string, titleId: string) => {
   }
 };
 
-const assertNoActiveDebtForTitlePurchase = async (
-  roomId: string,
-  playerId: string,
-) => {
-  const debts = await listRecords<Debt>('debts');
-  const hasActiveDebt = debts.some(
-    (debt) => isBlockingDebtForTitlePurchase(debt, roomId, playerId),
-  );
-
-  if (hasActiveDebt) {
-    throw new GameError(
-      'Quite suas dívidas com jogadores antes de comprar títulos.',
-    );
-  }
-};
-
 const addDirectPlayerToBankPayment = ({
   updates,
   roomId,
@@ -1016,10 +999,12 @@ export const payDebt = async ({
   roomId,
   debtId,
   executedByPlayerId,
+  amount,
 }: {
   roomId: string;
   debtId: string;
   executedByPlayerId: string;
+  amount?: number;
 }) => {
   const debtSnapshot = await get(ref(realtimeDatabase, `debts/${debtId}`));
 
@@ -1044,7 +1029,14 @@ export const payDebt = async ({
   const creditor = debt.to_player_id
     ? await getPlayer(debt.to_player_id)
     : null;
-  const amount = roundMoney(debt.remaining_amount);
+  const paymentAmount = roundMoney(amount ?? debt.remaining_amount);
+  const remainingAmount = roundMoney(debt.remaining_amount);
+
+  assertPositiveAmount(paymentAmount);
+
+  if (paymentAmount > remainingAmount) {
+    throw new GameError('O valor informado é maior que a dívida pendente.');
+  }
 
   assertPlayerInRoom(debtor, roomId);
 
@@ -1052,25 +1044,29 @@ export const payDebt = async ({
     assertPlayerInRoom(creditor, roomId);
   }
 
-  assertCanDebit(debtor, amount);
+  assertCanDebit(debtor, paymentAmount);
 
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
-    [`players/${debtor.id}/balance`]: roundMoney(debtor.balance - amount),
-    [`debts/${debt.id}/remaining_amount`]: 0,
+    [`players/${debtor.id}/balance`]: roundMoney(
+      debtor.balance - paymentAmount,
+    ),
+    [`debts/${debt.id}/remaining_amount`]: roundMoney(
+      remainingAmount - paymentAmount,
+    ),
     [`debts/${debt.id}/updated_at`]: now(),
   };
 
   if (creditor) {
     updates[`players/${creditor.id}/balance`] = roundMoney(
-      creditor.balance + amount,
+      creditor.balance + paymentAmount,
     );
   }
 
   addTransactionToUpdates(updates, {
     room_id: roomId,
     type: creditor ? 'PLAYER_TO_PLAYER' : 'PLAYER_TO_BANK',
-    amount,
+    amount: paymentAmount,
     from_player_id: debtor.id,
     to_player_id: creditor?.id ?? null,
     executed_by_player_id: executedByPlayerId,
@@ -1210,7 +1206,6 @@ export const requestTitlePurchase = async ({
   const player = await getPlayer(playerId);
   assertPlayerInRoom(player, roomId);
   assertCanDebit(player, definition.purchase_price);
-  await assertNoActiveDebtForTitlePurchase(roomId, playerId);
   await assertTitleAvailable(roomId, titleId);
 
   const createdRequest = createPendingRequestUpdate({
@@ -1520,7 +1515,6 @@ export const acceptPendingRequest = async ({
     }
 
     assertPlayerInRoom(buyer, request.room_id);
-    await assertNoActiveDebtForTitlePurchase(request.room_id, buyer.id);
     await assertTitleAvailable(request.room_id, request.title_id);
     addDirectPlayerToBankPayment({
       updates,

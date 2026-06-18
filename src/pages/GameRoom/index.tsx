@@ -87,7 +87,6 @@ import type {
   PurchasedTitle,
   Transaction,
 } from '@/types/game';
-import { isBlockingDebtForTitlePurchase } from '@/utils/debts';
 import { formatCurrency } from '@/utils/formatters';
 
 type MoneyFormValues = {
@@ -113,6 +112,10 @@ type ChargeFormValues = {
 
 type SaleFormValues = {
   buyerPlayerId?: string;
+  amount?: number;
+};
+
+type DebtPaymentFormValues = {
   amount?: number;
 };
 
@@ -477,6 +480,7 @@ export function GameRoom() {
   const [titlePurchaseForm] = Form.useForm<TitlePurchaseFormValues>();
   const [chargeForm] = Form.useForm<ChargeFormValues>();
   const [saleForm] = Form.useForm<SaleFormValues>();
+  const [debtPaymentForm] = Form.useForm<DebtPaymentFormValues>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [titleActionModal, setTitleActionModal] =
     useState<TitleActionModal>(null);
@@ -489,6 +493,7 @@ export function GameRoom() {
   const didInitializeNotificationsRef = useRef(false);
   const bankPaymentReason = Form.useWatch('reason', bankPaymentForm);
   const adminReason = Form.useWatch('reason', adminForm);
+  const debtPaymentAmount = Form.useWatch('amount', debtPaymentForm);
   const isBankPaymentAmountLocked = Boolean(
     bankPaymentReason && PRESET_REASON_AMOUNTS[bankPaymentReason],
   );
@@ -592,6 +597,21 @@ export function GameRoom() {
     () => state?.players.find((player) => player.id === playerId) ?? null,
     [playerId, state?.players],
   );
+
+  useEffect(() => {
+    if (!debtPaymentModal) {
+      debtPaymentForm.resetFields();
+      return;
+    }
+
+    debtPaymentForm.setFieldsValue({
+      amount: Math.min(
+        debtPaymentModal.remaining_amount,
+        currentPlayer?.balance ?? debtPaymentModal.remaining_amount,
+      ),
+    });
+  }, [currentPlayer?.balance, debtPaymentForm, debtPaymentModal]);
+
   const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
   const canUseBankMenuWhileJailed =
     isCurrentPlayerJailed && (currentPlayer?.is_banker ?? false);
@@ -704,18 +724,6 @@ export function GameRoom() {
     [currentPlayerDebts],
   );
 
-  const hasBlockingDebtForTitlePurchase = useMemo(
-    () =>
-      currentPlayerDebts.some((debt) =>
-        isBlockingDebtForTitlePurchase(
-          debt,
-          currentPlayer?.room_id ?? '',
-          playerId ?? '',
-        ),
-      ),
-    [currentPlayer?.room_id, currentPlayerDebts, playerId],
-  );
-
   const currentPlayerReceivableTotal = useMemo(
     () =>
       currentPlayerReceivables.reduce(
@@ -724,6 +732,15 @@ export function GameRoom() {
       ),
     [currentPlayerReceivables],
   );
+  const maxDebtPaymentAmount = debtPaymentModal
+    ? roundMoney(
+        Math.min(debtPaymentModal.remaining_amount, currentPlayer?.balance ?? 0),
+      )
+    : 0;
+  const isDebtPaymentAmountInvalid =
+    !debtPaymentAmount ||
+    debtPaymentAmount <= 0 ||
+    debtPaymentAmount > maxDebtPaymentAmount;
 
   const rankedPlayers = useMemo<RankingPlayer[]>(
     () =>
@@ -788,6 +805,7 @@ export function GameRoom() {
       titlePurchaseForm.resetFields();
       chargeForm.resetFields();
       saleForm.resetFields();
+      debtPaymentForm.resetFields();
       setTitleActionModal(null);
       setDebtPaymentModal(null);
       setSelectedTitleId(undefined);
@@ -993,13 +1011,6 @@ export function GameRoom() {
       return;
     }
 
-    if (hasBlockingDebtForTitlePurchase) {
-      message.error(
-        'Quite suas dívidas com jogadores antes de comprar títulos.',
-      );
-      return;
-    }
-
     void executeAction(
       () =>
         requestTitlePurchase({
@@ -1055,10 +1066,12 @@ export function GameRoom() {
     });
   };
 
-  const handlePayDebt = () => {
+  const handlePayDebt = async () => {
     if (!debtPaymentModal) {
       return;
     }
+
+    const values = await debtPaymentForm.validateFields();
 
     void executeAction(
       () =>
@@ -1066,8 +1079,12 @@ export function GameRoom() {
           roomId: currentPlayer?.room_id ?? '',
           debtId: debtPaymentModal.id,
           executedByPlayerId: playerId,
+          amount: values.amount ?? 0,
         }),
-      'Dívida paga.',
+      roundMoney(values.amount ?? 0) ===
+        roundMoney(debtPaymentModal.remaining_amount)
+        ? 'Dívida paga.'
+        : 'Pagamento parcial registrado.',
     );
   };
 
@@ -1950,9 +1967,8 @@ export function GameRoom() {
                           {selectedTitle ? (
                             <Alert
                               type={
-                                hasBlockingDebtForTitlePurchase ||
                                 (currentPlayer?.balance ?? 0) <
-                                  selectedTitle.purchase_price
+                                selectedTitle.purchase_price
                                   ? 'error'
                                   : 'info'
                               }
@@ -1961,12 +1977,10 @@ export function GameRoom() {
                                 selectedTitle.purchase_price,
                               )}`}
                               description={
-                                hasBlockingDebtForTitlePurchase
-                                  ? 'Quite suas dívidas com jogadores antes de comprar títulos.'
-                                  : (currentPlayer?.balance ?? 0) >=
-                                      selectedTitle.purchase_price
-                                    ? 'Depois de pedir, confirme a compra para ganhar o título.'
-                                    : 'Saldo insuficiente.'
+                                (currentPlayer?.balance ?? 0) >=
+                                selectedTitle.purchase_price
+                                  ? 'Depois de pedir, confirme a compra para ganhar o título.'
+                                  : 'Saldo insuficiente.'
                               }
                               style={{ marginBottom: 16 }}
                             />
@@ -1975,7 +1989,6 @@ export function GameRoom() {
                             <Button
                               type="primary"
                               htmlType="submit"
-                              disabled={hasBlockingDebtForTitlePurchase}
                               loading={isSubmitting}
                               style={{ flex: 1 }}
                             >
@@ -2366,14 +2379,10 @@ export function GameRoom() {
             <Button
               type="primary"
               loading={isSubmitting}
-              disabled={
-                Boolean(debtPaymentModal) &&
-                (currentPlayer?.balance ?? 0) <
-                  (debtPaymentModal?.remaining_amount ?? 0)
-              }
-              onClick={handlePayDebt}
+              disabled={isDebtPaymentAmountInvalid}
+              onClick={() => void handlePayDebt()}
             >
-              Confirmar pagamento
+              Registrar pagamento
             </Button>
           </Space>
         }
@@ -2393,13 +2402,57 @@ export function GameRoom() {
               <Descriptions.Item label="Valor total">
                 {formatCurrency(debtPaymentModal.remaining_amount)}
               </Descriptions.Item>
+              <Descriptions.Item label="Saldo disponível">
+                {formatCurrency(currentPlayer?.balance ?? 0)}
+              </Descriptions.Item>
             </Descriptions>
-            {(currentPlayer?.balance ?? 0) <
-            debtPaymentModal.remaining_amount ? (
+            <Form
+              form={debtPaymentForm}
+              layout="vertical"
+              requiredMark={false}
+            >
+              <Form.Item
+                name="amount"
+                label="Valor a pagar"
+                rules={[
+                  {
+                    required: true,
+                    message: 'Informe o valor do pagamento.',
+                  },
+                  {
+                    type: 'number',
+                    min: 0.01,
+                    message: 'Informe um valor maior que zero.',
+                  },
+                  {
+                    validator: (_, value?: number) => {
+                      if (!value || value <= maxDebtPaymentAmount) {
+                        return Promise.resolve();
+                      }
+
+                      return Promise.reject(
+                        new Error(
+                          'O valor não pode passar da dívida ou do seu saldo.',
+                        ),
+                      );
+                    },
+                  },
+                ]}
+              >
+                <InputNumber
+                  min={0.01}
+                  max={maxDebtPaymentAmount || undefined}
+                  precision={2}
+                  style={{ width: '100%' }}
+                  prefix="R$"
+                />
+              </Form.Item>
+            </Form>
+            {maxDebtPaymentAmount < debtPaymentModal.remaining_amount ? (
               <Alert
-                type="error"
+                type="warning"
                 showIcon
-                title="Saldo insuficiente para pagar a dívida inteira."
+                title="Você pode registrar um pagamento parcial com o saldo disponível."
               />
             ) : null}
           </Flex>
