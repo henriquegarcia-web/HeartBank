@@ -1,7 +1,10 @@
 ﻿import { get, onValue, push, ref, update } from 'firebase/database';
 
 import { listRecords } from '@/api/firebaseDatabase';
-import { getBankLoanAmountByNetWorth } from '@/constants/bankLoans';
+import {
+  BANK_LOAN_INTEREST_AMOUNT,
+  getBankLoanAmountByNetWorth,
+} from '@/constants/bankLoans';
 import {
   calculatePurchasedTitleAssetValue,
   getLandChargeAmount,
@@ -1111,6 +1114,7 @@ export const createBankLoan = async ({
       0,
     );
   const loanAmount = getBankLoanAmountByNetWorth(player.balance + assetValue);
+  const debtAmount = roundMoney(loanAmount + BANK_LOAN_INTEREST_AMOUNT);
   const updates: Record<string, unknown> = {
     [`rooms/${roomId}/last_played_at`]: now(),
     [`players/${playerId}/balance`]: roundMoney(player.balance + loanAmount),
@@ -1129,8 +1133,8 @@ export const createBankLoan = async ({
     room_id: roomId,
     from_player_id: playerId,
     to_player_id: null,
-    original_amount: loanAmount,
-    remaining_amount: loanAmount,
+    original_amount: debtAmount,
+    remaining_amount: debtAmount,
     reason: 'Empréstimo bancário',
   });
 

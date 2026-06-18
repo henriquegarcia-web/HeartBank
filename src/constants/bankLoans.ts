@@ -4,6 +4,8 @@ export type BankLoanTier = {
   loanAmount: number;
 };
 
+export const BANK_LOAN_INTEREST_AMOUNT = 500;
+
 export const BANK_LOAN_TIERS: BankLoanTier[] = [
   { minNetWorth: 0, maxNetWorth: 5000, loanAmount: 2000 },
   { minNetWorth: 5001, maxNetWorth: 10000, loanAmount: 3000 },

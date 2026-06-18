@@ -68,7 +68,10 @@ import {
   upgradePurchasedTitle,
 } from '@/api/gameService';
 import { AppLayout } from '@/components/ui';
-import { getBankLoanAmountByNetWorth } from '@/constants/bankLoans';
+import {
+  BANK_LOAN_INTEREST_AMOUNT,
+  getBankLoanAmountByNetWorth,
+} from '@/constants/bankLoans';
 import {
   calculatePurchasedTitleAssetValue,
   getLandChargeAmount,
@@ -678,6 +681,9 @@ export function GameRoom() {
     (currentPlayer?.balance ?? 0) + currentPlayerAssetValue,
   );
   const bankLoanAmount = getBankLoanAmountByNetWorth(currentPlayerNetWorth);
+  const bankLoanDebtAmount = roundMoney(
+    bankLoanAmount + BANK_LOAN_INTEREST_AMOUNT,
+  );
 
   const currentPlayerDebts = useMemo(
     () =>
@@ -945,7 +951,9 @@ export function GameRoom() {
       title: 'Confirmar empréstimo bancário?',
       content: `O banco vai liberar ${formatCurrency(
         bankLoanAmount,
-      )} e criar uma dívida ativa no mesmo valor.`,
+      )} e criar uma dívida ativa de ${formatCurrency(
+        bankLoanDebtAmount,
+      )}, incluindo ${formatCurrency(BANK_LOAN_INTEREST_AMOUNT)} de juros.`,
       okText: 'Confirmar',
       cancelText: 'Cancelar',
       onOk: () =>
@@ -1810,6 +1818,12 @@ export function GameRoom() {
                           </Descriptions.Item>
                           <Descriptions.Item label="Valor disponível">
                             {formatCurrency(bankLoanAmount)}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Juros">
+                            {formatCurrency(BANK_LOAN_INTEREST_AMOUNT)}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Total da dívida">
+                            {formatCurrency(bankLoanDebtAmount)}
                           </Descriptions.Item>
                         </Descriptions>
                         {currentPlayerDebtTotal > 0 ? (
