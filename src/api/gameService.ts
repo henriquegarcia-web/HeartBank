@@ -25,7 +25,7 @@ import type {
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
-export const JAIL_BAIL_AMOUNT = 2000;
+export const JAIL_BAIL_AMOUNT = 500;
 
 type RoomSnapshot = {
   room: FirebaseRecord<Room>;
