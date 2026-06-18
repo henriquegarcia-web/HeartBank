@@ -97,15 +97,17 @@ const withPlayerDefaults = <T extends FirebaseRecord<Player>>(
   jail_attempts: player.jail_attempts ?? 0,
 });
 
-export const getRoomByCode = async (code: string) => {
+const getRoomsByCode = async (code: string) => {
   const normalizedCode = code.trim().toUpperCase();
   const rooms = await listRecords<Room>('rooms');
 
-  return (
-    rooms.find((room) => room.code.trim().toUpperCase() === normalizedCode) ??
-    null
-  );
+  return rooms
+    .filter((room) => room.code.trim().toUpperCase() === normalizedCode)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 };
+
+export const getRoomByCode = async (code: string) =>
+  (await getRoomsByCode(code))[0] ?? null;
 
 export const createRoom = async (name: string) => {
   const normalizedName = name.trim().replace(/\s+/g, ' ');
@@ -266,18 +268,35 @@ export const deleteRoomByMasterPassword = async (roomId: string) => {
   await update(ref(realtimeDatabase), updates);
 };
 
-export const enterRoomByCode = async (code: string) => {
+export const enterRoomByCode = async (code: string, playerId?: string) => {
   if (!code.trim()) {
     throw new GameError('Informe o código da sessão.');
   }
 
-  const room = await getRoomByCode(code);
+  const rooms = await getRoomsByCode(code);
 
-  if (!room) {
+  if (rooms.length === 0) {
     throw new GameError('Sessão não encontrada.');
   }
 
-  return room;
+  if (playerId) {
+    const players = await listRecords<Player>('players');
+    const player = players.find((candidate) => candidate.id === playerId);
+
+    if (!player) {
+      throw new GameError('Jogador não encontrado.');
+    }
+
+    const playerRoom = rooms.find((room) => room.id === player.room_id);
+
+    if (!playerRoom) {
+      throw new GameError('Jogador inválido para esta sessão.');
+    }
+
+    return playerRoom;
+  }
+
+  return rooms[0];
 };
 
 export const enterPlayerProfile = async ({
@@ -539,6 +558,26 @@ const assertCanDebit = (player: FirebaseRecord<Player>, amount: number) => {
 const assertBanker = (player: FirebaseRecord<Player>) => {
   if (!player.is_banker) {
     throw new GameError('Apenas o banqueiro pode executar esta ação.');
+  }
+};
+
+const assertRoomBanker = async (
+  player: FirebaseRecord<Player>,
+  roomId: string,
+) => {
+  assertBanker(player);
+  assertPlayerInRoom(player, roomId);
+
+  const roomSnapshot = await get(ref(realtimeDatabase, `rooms/${roomId}`));
+
+  if (!roomSnapshot.exists()) {
+    throw new GameError('Sala não encontrada.');
+  }
+
+  const room = roomSnapshot.val() as Room;
+
+  if (room.banker_player_id !== player.id) {
+    throw new GameError('Apenas o banqueiro oficial da sala pode executar esta ação.');
   }
 };
 
@@ -874,7 +913,7 @@ export const moveMoney = async ({
   }
 
   if (type === 'BANK_TO_PLAYER' || type === 'BANK_CHARGE_PLAYER') {
-    assertBanker(executedByPlayer);
+    await assertRoomBanker(executedByPlayer, roomId);
   }
 
   if (fromPlayer && ALLOW_NEGATIVE_BALANCE) {
@@ -1000,7 +1039,7 @@ export const startGameState = async ({
     getRoomPlayers(roomId),
   ]);
 
-  assertBanker(executedByPlayer);
+  await assertRoomBanker(executedByPlayer, roomId);
   assertPlayerInRoom(executedByPlayer, roomId);
 
   const normalizedOrder = normalizePlayerOrder(
@@ -1056,7 +1095,7 @@ export const updatePlayerOrder = async ({
     getGameState(roomId),
   ]);
 
-  assertBanker(executedByPlayer);
+  await assertRoomBanker(executedByPlayer, roomId);
   assertPlayerInRoom(executedByPlayer, roomId);
 
   const normalizedOrder = normalizePlayerOrder(
@@ -1418,7 +1457,7 @@ export const setPlayerJailStatus = async ({
     getPlayer(targetPlayerId),
   ]);
 
-  assertBanker(executedByPlayer);
+  await assertRoomBanker(executedByPlayer, roomId);
   assertPlayerInRoom(executedByPlayer, roomId);
   assertPlayerInRoom(targetPlayer, roomId);
 
@@ -1444,7 +1483,7 @@ export const resignPlayer = async ({
     getPlayer(targetPlayerId),
   ]);
 
-  assertBanker(executedByPlayer);
+  await assertRoomBanker(executedByPlayer, roomId);
   assertPlayerInRoom(executedByPlayer, roomId);
   assertPlayerInRoom(targetPlayer, roomId);
 
@@ -1521,7 +1560,7 @@ export const releasePlayerBail = async ({
     getPlayer(targetPlayerId),
   ]);
 
-  assertBanker(executedByPlayer);
+  await assertRoomBanker(executedByPlayer, roomId);
   assertPlayerInRoom(executedByPlayer, roomId);
   assertPlayerInRoom(targetPlayer, roomId);
 

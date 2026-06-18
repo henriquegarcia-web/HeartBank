@@ -242,6 +242,7 @@ const CALCULATOR_KEYS = [
   '+',
 ];
 const PIX_AUDIO_SRC = '/audio_pix.mp3';
+const DICE_AUDIO_SRC = '/dados.mp3';
 const MASTER_DELETE_PASSWORD = import.meta.env
   .VITE_MASTER_ROOM_DELETE_PASSWORD as string | undefined;
 
@@ -269,14 +270,18 @@ const getTransactionSignal = (
   return transaction.type === 'BANK_TO_PLAYER' ? '+' : '-';
 };
 
-const playPixAudio = () => {
-  const audio = new Audio(PIX_AUDIO_SRC);
-  audio.volume = 0.8;
+const playAudio = (src: string, volume = 0.8) => {
+  const audio = new Audio(src);
+  audio.volume = volume;
 
   void audio.play().catch(() => {
     // Browsers can block audio before the user interacts with the page.
   });
 };
+
+const playPixAudio = () => playAudio(PIX_AUDIO_SRC, 0.8);
+
+const playDiceAudio = () => playAudio(DICE_AUDIO_SRC, 0.9);
 
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('pt-BR', {
@@ -974,7 +979,7 @@ export function GameRoom() {
     let unsubscribe = () => {};
 
     const loadRoom = async () => {
-      const room = await enterRoomByCode(code);
+      const room = await enterRoomByCode(code, playerId);
 
       unsubscribe = subscribeRoomSnapshot(room.id, (snapshot) => {
         setIsLoading(false);
@@ -1450,6 +1455,7 @@ export function GameRoom() {
       dice: null,
       total: null,
     });
+    playDiceAudio();
 
     try {
       const lastRoll = await rollDiceForCurrentTurn({
