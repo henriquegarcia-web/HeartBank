@@ -146,6 +146,7 @@
       "created_at": "2026-06-18T21:00:00.000Z",
       "updated_at": "2026-06-18T21:00:00.000Z"
     },
+
     "title_rafael_ecommerce": {
       "room_id": "room_primeira_sala",
       "title_id": "ecommerce",
@@ -211,6 +212,7 @@
       "created_at": "2026-06-18T21:00:00.000Z",
       "updated_at": "2026-06-18T21:00:00.000Z"
     },
+
     "title_tarsi_petroleira": {
       "room_id": "room_primeira_sala",
       "title_id": "petroleira",
@@ -276,6 +278,7 @@
       "created_at": "2026-06-18T21:00:00.000Z",
       "updated_at": "2026-06-18T21:00:00.000Z"
     },
+
     "title_luana_brigadeiro_faria_lima": {
       "room_id": "room_primeira_sala",
       "title_id": "av-brigadeiro-faria-lima",

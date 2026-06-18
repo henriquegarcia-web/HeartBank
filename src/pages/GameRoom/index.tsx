@@ -2025,7 +2025,7 @@ export function GameRoom() {
           `${getPlayerName(
             state?.players ?? [],
             debt.from_player_id,
-          )} ? ${getPlayerName(state?.players ?? [], debt.to_player_id)}`,
+          )} → ${getPlayerName(state?.players ?? [], debt.to_player_id)}`,
           debt.reason,
         ),
     },
