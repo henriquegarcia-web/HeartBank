@@ -22,6 +22,10 @@ import type {
   Transaction,
   TransactionType,
 } from '@/types/game';
+import {
+  getDebtStage,
+  isDebtStageBlockingPurchases,
+} from '@/utils/financialRules';
 
 const ALLOW_NEGATIVE_BALANCE = false;
 const INITIAL_BALANCE = 1500;
@@ -510,6 +514,56 @@ const assertTitleAvailable = async (roomId: string, titleId: string) => {
 
   if (isPurchased) {
     throw new GameError('Este título já foi comprado.');
+  }
+};
+
+const getPlayerTitleAssetValue = (
+  purchasedTitles: Array<FirebaseRecord<PurchasedTitle>>,
+  roomId: string,
+  playerId: string,
+) =>
+  purchasedTitles
+    .filter(
+      (title) => title.room_id === roomId && title.owner_player_id === playerId,
+    )
+    .reduce(
+      (total, title) => total + calculatePurchasedTitleAssetValue(title),
+      0,
+    );
+
+const getPlayerActiveDebtTotal = (
+  debts: Array<FirebaseRecord<Debt>>,
+  roomId: string,
+  playerId: string,
+) =>
+  debts
+    .filter(
+      (debt) =>
+        debt.room_id === roomId &&
+        debt.from_player_id === playerId &&
+        debt.remaining_amount > 0,
+    )
+    .reduce((total, debt) => total + debt.remaining_amount, 0);
+
+const assertPlayerCanAcquireAssets = async (
+  roomId: string,
+  playerId: string,
+) => {
+  const [debts, purchasedTitles] = await Promise.all([
+    listRecords<Debt>('debts'),
+    listRecords<PurchasedTitle>('purchased_titles'),
+  ]);
+  const debtTotal = getPlayerActiveDebtTotal(debts, roomId, playerId);
+  const titleAssetValue = getPlayerTitleAssetValue(
+    purchasedTitles,
+    roomId,
+    playerId,
+  );
+
+  if (isDebtStageBlockingPurchases(getDebtStage(debtTotal, titleAssetValue))) {
+    throw new GameError(
+      'Quite seus débitos antes de comprar títulos, casas ou hotéis.',
+    );
   }
 };
 
@@ -1101,14 +1155,7 @@ export const createBankLoan = async ({
     throw new GameError('Quite suas dívidas ativas antes de pedir empréstimo.');
   }
 
-  const assetValue = purchasedTitles
-    .filter(
-      (title) => title.room_id === roomId && title.owner_player_id === playerId,
-    )
-    .reduce(
-      (total, title) => total + calculatePurchasedTitleAssetValue(title),
-      0,
-    );
+  const assetValue = getPlayerTitleAssetValue(purchasedTitles, roomId, playerId);
   const loanAmount = getBankLoanAmountByNetWorth(player.balance + assetValue);
   const debtAmount = roundMoney(getBankLoanDebtAmount(loanAmount));
   const updates: Record<string, unknown> = {
@@ -1205,6 +1252,7 @@ export const requestTitlePurchase = async ({
 
   const player = await getPlayer(playerId);
   assertPlayerInRoom(player, roomId);
+  await assertPlayerCanAcquireAssets(roomId, playerId);
   assertCanDebit(player, definition.purchase_price);
   await assertTitleAvailable(roomId, titleId);
 
@@ -1245,6 +1293,7 @@ export const upgradePurchasedTitle = async ({
   const definition = getTitleDefinition(purchasedTitle.title_id);
 
   assertPlayerInRoom(player, roomId);
+  await assertPlayerCanAcquireAssets(roomId, playerId);
 
   if (
     purchasedTitle.room_id !== roomId ||
@@ -1462,6 +1511,62 @@ export const createTitleSaleRequest = async ({
     [`pending_requests/${createdRequest.key}`]: createdRequest.value,
   });
 };
+
+export const sellTitleToBank = async ({
+  roomId,
+  sellerPlayerId,
+  purchasedTitleId,
+}: {
+  roomId: string;
+  sellerPlayerId: string;
+  purchasedTitleId: string;
+}) => {
+  const [seller, purchasedTitle, pendingRequests] = await Promise.all([
+    getPlayer(sellerPlayerId),
+    getPurchasedTitle(purchasedTitleId),
+    listRecords<PendingRequest>('pending_requests'),
+  ]);
+  const definition = getTitleDefinition(purchasedTitle.title_id);
+
+  assertPlayerInRoom(seller, roomId);
+
+  if (
+    purchasedTitle.room_id !== roomId ||
+    purchasedTitle.owner_player_id !== sellerPlayerId
+  ) {
+    throw new GameError('Você não possui este título.');
+  }
+
+  const titleValue = calculatePurchasedTitleAssetValue(purchasedTitle);
+  const saleAmount = roundMoney(titleValue * 0.75);
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`players/${seller.id}/balance`]: roundMoney(seller.balance + saleAmount),
+    [`purchased_titles/${purchasedTitle.id}`]: null,
+  };
+
+  pendingRequests
+    .filter(
+      (request) =>
+        request.room_id === roomId &&
+        request.purchased_title_id === purchasedTitle.id,
+    )
+    .forEach((request) => {
+      updates[`pending_requests/${request.id}`] = null;
+    });
+
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'BANK_TO_PLAYER',
+    amount: saleAmount,
+    from_player_id: null,
+    to_player_id: seller.id,
+    executed_by_player_id: seller.id,
+    reason: `Venda de título ao banco - ${definition?.name ?? 'Título'}`,
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
 export const acceptPendingRequest = async ({
   requestId,
   executedByPlayerId,
@@ -1515,6 +1620,7 @@ export const acceptPendingRequest = async ({
     }
 
     assertPlayerInRoom(buyer, request.room_id);
+    await assertPlayerCanAcquireAssets(request.room_id, buyer.id);
     await assertTitleAvailable(request.room_id, request.title_id);
     addDirectPlayerToBankPayment({
       updates,
@@ -1618,6 +1724,30 @@ export const declinePendingRequest = async ({
       'Cobranças de aluguel e ação precisam ser confirmadas.',
     );
   }
+
+  await update(ref(realtimeDatabase), {
+    [`pending_requests/${request.id}`]: null,
+    [`rooms/${request.room_id}/last_played_at`]: now(),
+  });
+};
+
+export const cancelPendingChargeRequest = async ({
+  requestId,
+  executedByPlayerId,
+}: {
+  requestId: string;
+  executedByPlayerId: string;
+}) => {
+  const [request, executedByPlayer] = await Promise.all([
+    getPendingRequest(requestId),
+    getPlayer(executedByPlayerId),
+  ]);
+
+  if (request.kind !== 'RENT_CHARGE' && request.kind !== 'STOCK_CHARGE') {
+    throw new GameError('Apenas cobranças de aluguel e ação podem ser canceladas.');
+  }
+
+  assertPlayerInRoom(executedByPlayer, request.room_id);
 
   await update(ref(realtimeDatabase), {
     [`pending_requests/${request.id}`]: null,

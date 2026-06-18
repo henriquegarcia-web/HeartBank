@@ -9,8 +9,10 @@
   Empty,
   Flex,
   Form,
+  Input,
   InputNumber,
   Modal,
+  Radio,
   Row,
   Select,
   Space,
@@ -42,11 +44,13 @@ import {
   LuSkull,
   LuTrophy,
   LuWallet,
+  LuX,
 } from 'react-icons/lu';
 import { GiHandcuffs } from 'react-icons/gi';
 
 import {
   acceptPendingRequest,
+  cancelPendingChargeRequest,
   createBankLoan,
   createPlayerLoanRequest,
   createRentChargeRequest,
@@ -63,13 +67,14 @@ import {
   releasePlayerBail,
   requestTitlePurchase,
   resignPlayer,
+  sellTitleToBank,
   setPlayerJailStatus,
   subscribeRoomSnapshot,
   upgradePurchasedTitle,
 } from '@/api/gameService';
 import { AppLayout } from '@/components/ui';
 import {
-  BANK_LOAN_INTEREST_AMOUNT,
+  BANK_LOAN_INTEREST_RATE,
   getBankLoanDebtAmount,
   getBankLoanAmountByNetWorth,
 } from '@/constants/bankLoans';
@@ -88,6 +93,14 @@ import type {
   Transaction,
 } from '@/types/game';
 import { formatCurrency } from '@/utils/formatters';
+import {
+  calculateAmountWithInterest,
+  calculateAmountWithoutInterest,
+  calculateInterestAmount,
+  getDebtStage,
+  isDebtStageBlockingPurchases,
+  type DebtStage,
+} from '@/utils/financialRules';
 
 type MoneyFormValues = {
   playerId?: string;
@@ -99,6 +112,13 @@ type PlayerLoanFormValues = {
   creditorPlayerId?: string;
   requestedAmount?: number;
   repaymentAmount?: number;
+  interestRate?: number;
+};
+
+type InterestCalculatorFormValues = {
+  baseAmount?: number;
+  interestRate?: number;
+  mode?: 'ADD' | 'SUBTRACT';
 };
 
 type TitlePurchaseFormValues = {
@@ -111,12 +131,17 @@ type ChargeFormValues = {
 };
 
 type SaleFormValues = {
+  mode?: 'BANK' | 'PLAYER';
   buyerPlayerId?: string;
   amount?: number;
 };
 
 type DebtPaymentFormValues = {
   amount?: number;
+};
+
+type CancelChargeFormValues = {
+  masterPassword?: string;
 };
 
 type RoomState = {
@@ -166,6 +191,7 @@ const BANK_ACTION_REASON_OPTIONS = [
   'Notícia',
   'Bônus de Rodada',
   'Restituição do Imposto',
+  'Outros',
 ].map((reason) => ({
   label: reason,
   value: reason,
@@ -184,6 +210,7 @@ const DICE_OPTIONS = Array.from({ length: 12 }, (_, index) => {
     value,
   };
 });
+const BANK_TITLE_SALE_RATE = 0.75;
 
 const CALCULATOR_KEYS = [
   '7',
@@ -204,6 +231,8 @@ const CALCULATOR_KEYS = [
   '+',
 ];
 const PIX_AUDIO_SRC = '/audio_pix.mp3';
+const MASTER_DELETE_PASSWORD = import.meta.env
+  .VITE_MASTER_ROOM_DELETE_PASSWORD as string | undefined;
 
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
 
@@ -243,6 +272,127 @@ const playPixAudio = () => {
     // Browsers can block audio before the user interacts with the page.
   });
 };
+
+const formatDateTime = (value: string) =>
+  new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(new Date(value));
+
+const getDebtStageLabel = (stage: DebtStage) => {
+  if (stage === 3) {
+    return 'Recuperação judicial';
+  }
+
+  if (stage === 2) {
+    return 'Risco de falência';
+  }
+
+  if (stage === 1) {
+    return 'Quitação necessária';
+  }
+
+  return 'Regular';
+};
+
+const getPurchasedTitleValuation = (
+  purchasedTitle: FirebaseRecord<PurchasedTitle> | null | undefined,
+) => {
+  const definition = getTitleDefinition(purchasedTitle?.title_id ?? null);
+
+  if (!purchasedTitle || !definition) {
+    return null;
+  }
+
+  const improvements: Array<{ label: string; amount: number }> = [];
+
+  if (definition.kind === 'LAND') {
+    if (purchasedTitle.houses > 0) {
+      improvements.push({
+        label: `${purchasedTitle.houses}x casas`,
+        amount: purchasedTitle.houses * definition.acquisition.house_price,
+      });
+    }
+
+    if (purchasedTitle.has_hotel) {
+      improvements.push({
+        label: '1x hotel',
+        amount: definition.acquisition.hotel_price,
+      });
+    }
+  }
+
+  const totalValue = calculatePurchasedTitleAssetValue(purchasedTitle);
+
+  return {
+    definition,
+    baseValue: definition.purchase_price,
+    improvements,
+    totalValue,
+    bankSaleValue: roundMoney(totalValue * BANK_TITLE_SALE_RATE),
+  };
+};
+
+function PlayerFinancialSummary({
+  player,
+  assetValue,
+  debtTotal,
+  receivableTotal,
+  debtStage,
+  isLoading,
+}: {
+  player: FirebaseRecord<Player> | null;
+  assetValue: number;
+  debtTotal: number;
+  receivableTotal: number;
+  debtStage: DebtStage;
+  isLoading: boolean;
+}) {
+  return (
+    <Card loading={isLoading}>
+      <Flex justify="space-between" gap={16} wrap="wrap">
+        <Flex vertical gap={4}>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            {player?.name}
+          </Typography.Title>
+          <Space wrap>
+            {player?.is_banker ? <Tag color="gold">Banqueiro</Tag> : null}
+            {debtStage > 0 ? (
+              <Tag color={debtStage === 3 ? 'red' : 'orange'}>
+                {getDebtStageLabel(debtStage)}
+              </Tag>
+            ) : null}
+          </Space>
+        </Flex>
+        <Descriptions
+          column={{ xs: 1, sm: 2, md: 4 }}
+          size="small"
+          layout="vertical"
+          style={{ flex: 1, minWidth: 260 }}
+        >
+          <Descriptions.Item label="Saldo atual">
+            <Typography.Text strong>
+              {formatCurrency(player?.balance ?? 0)}
+            </Typography.Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Patrimônio">
+            <Typography.Text strong>{formatCurrency(assetValue)}</Typography.Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="A receber">
+            <Typography.Text type="success" strong>
+              {formatCurrency(receivableTotal)}
+            </Typography.Text>
+          </Descriptions.Item>
+          <Descriptions.Item label="Dívidas">
+            <Typography.Text type={debtTotal > 0 ? 'danger' : undefined} strong>
+              {formatCurrency(debtTotal)}
+            </Typography.Text>
+          </Descriptions.Item>
+        </Descriptions>
+      </Flex>
+    </Card>
+  );
+}
 
 function QuickAmountButtons({
   form,
@@ -468,6 +618,64 @@ function Calculator() {
   );
 }
 
+function InterestCalculator() {
+  const [form] = Form.useForm<InterestCalculatorFormValues>();
+  const baseAmount = Form.useWatch('baseAmount', form) ?? 0;
+  const interestRate = Form.useWatch('interestRate', form) ?? 0;
+  const mode = Form.useWatch('mode', form) ?? 'ADD';
+  const interestAmount = calculateInterestAmount(baseAmount, interestRate);
+  const result =
+    mode === 'ADD'
+      ? calculateAmountWithInterest(baseAmount, interestRate)
+      : calculateAmountWithoutInterest(baseAmount, interestRate);
+
+  return (
+    <Card title="Calculadora de Juros">
+      <Form
+        form={form}
+        layout="vertical"
+        requiredMark={false}
+        initialValues={{ mode: 'ADD', interestRate: 0 }}
+      >
+        <Form.Item name="baseAmount" label="Valor base">
+          <InputNumber
+            min={0}
+            precision={2}
+            style={{ width: '100%' }}
+            prefix="R$"
+          />
+        </Form.Item>
+        <Form.Item name="interestRate" label="Taxa de juros">
+          <InputNumber
+            min={0}
+            precision={2}
+            style={{ width: '100%' }}
+            suffix="%"
+          />
+        </Form.Item>
+        <Form.Item name="mode" label="Operação">
+          <Radio.Group
+            optionType="button"
+            buttonStyle="solid"
+            options={[
+              { label: 'Acrescentar juros', value: 'ADD' },
+              { label: 'Descontar juros', value: 'SUBTRACT' },
+            ]}
+          />
+        </Form.Item>
+        <Descriptions column={1} size="small" bordered>
+          <Descriptions.Item label="Juros">
+            {formatCurrency(interestAmount)}
+          </Descriptions.Item>
+          <Descriptions.Item label="Resultado">
+            <Typography.Text strong>{formatCurrency(result)}</Typography.Text>
+          </Descriptions.Item>
+        </Descriptions>
+      </Form>
+    </Card>
+  );
+}
+
 export function GameRoom() {
   const { message, modal, notification } = App.useApp();
   const navigate = useNavigate();
@@ -481,11 +689,14 @@ export function GameRoom() {
   const [chargeForm] = Form.useForm<ChargeFormValues>();
   const [saleForm] = Form.useForm<SaleFormValues>();
   const [debtPaymentForm] = Form.useForm<DebtPaymentFormValues>();
+  const [cancelChargeForm] = Form.useForm<CancelChargeFormValues>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [titleActionModal, setTitleActionModal] =
     useState<TitleActionModal>(null);
   const [debtPaymentModal, setDebtPaymentModal] =
     useState<DebtPaymentModal>(null);
+  const [isCancelChargeModalOpen, setIsCancelChargeModalOpen] =
+    useState(false);
   const [activeTabKey, setActiveTabKey] = useState<GameTabKey>('player');
   const [selectedTitleId, setSelectedTitleId] = useState<string>();
   const [selectedDiceCount, setSelectedDiceCount] = useState<number>();
@@ -494,6 +705,15 @@ export function GameRoom() {
   const bankPaymentReason = Form.useWatch('reason', bankPaymentForm);
   const adminReason = Form.useWatch('reason', adminForm);
   const debtPaymentAmount = Form.useWatch('amount', debtPaymentForm);
+  const saleMode = Form.useWatch('mode', saleForm) ?? 'PLAYER';
+  const playerLoanRequestedAmount =
+    Form.useWatch('requestedAmount', playerLoanForm) ?? 0;
+  const playerLoanInterestRate =
+    Form.useWatch('interestRate', playerLoanForm) ?? 0;
+  const playerLoanRepaymentAmount = calculateAmountWithInterest(
+    playerLoanRequestedAmount,
+    playerLoanInterestRate,
+  );
   const isBankPaymentAmountLocked = Boolean(
     bankPaymentReason && PRESET_REASON_AMOUNTS[bankPaymentReason],
   );
@@ -514,6 +734,10 @@ export function GameRoom() {
 
     adminForm.setFieldValue('amount', amount);
   }, [adminForm, adminReason]);
+
+  useEffect(() => {
+    playerLoanForm.setFieldValue('repaymentAmount', playerLoanRepaymentAmount);
+  }, [playerLoanForm, playerLoanRepaymentAmount]);
 
   useEffect(() => {
     if (!code || !playerId) {
@@ -612,24 +836,11 @@ export function GameRoom() {
     });
   }, [currentPlayer?.balance, debtPaymentForm, debtPaymentModal]);
 
-  const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
-  const canUseBankMenuWhileJailed =
-    isCurrentPlayerJailed && (currentPlayer?.is_banker ?? false);
-  const shouldShowJailBackdrop =
-    isCurrentPlayerJailed &&
-    !(currentPlayer?.is_banker && activeTabKey === 'banker');
-
   useEffect(() => {
     if (activeTabKey === 'banker' && !currentPlayer?.is_banker) {
       setActiveTabKey('player');
     }
   }, [activeTabKey, currentPlayer?.is_banker]);
-
-  useEffect(() => {
-    if (canUseBankMenuWhileJailed && activeTabKey !== 'banker') {
-      setActiveTabKey('banker');
-    }
-  }, [activeTabKey, canUseBankMenuWhileJailed]);
 
   const playerOptions = useMemo(
     () =>
@@ -732,6 +943,22 @@ export function GameRoom() {
       ),
     [currentPlayerReceivables],
   );
+  const currentDebtStage = getDebtStage(
+    currentPlayerDebtTotal,
+    currentPlayerAssetValue,
+  );
+  const isDebtPurchaseBlocked =
+    isDebtStageBlockingPurchases(currentDebtStage);
+  const isCurrentPlayerJailed = currentPlayer?.is_jailed ?? false;
+  const isTitlesTabAvailableWhileRestricted = activeTabKey === 'titles';
+  const shouldShowJailBackdrop =
+    isCurrentPlayerJailed &&
+    !isTitlesTabAvailableWhileRestricted &&
+    !(currentPlayer?.is_banker && activeTabKey === 'banker');
+  const shouldShowJudicialRecoveryBackdrop =
+    currentDebtStage === 3 &&
+    !isTitlesTabAvailableWhileRestricted &&
+    !shouldShowJailBackdrop;
   const maxDebtPaymentAmount = debtPaymentModal
     ? roundMoney(
         Math.min(debtPaymentModal.remaining_amount, currentPlayer?.balance ?? 0),
@@ -781,6 +1008,21 @@ export function GameRoom() {
     selectedModalTitleDefinition?.kind === 'STOCK'
       ? (selectedDiceCount ?? 0) * selectedModalTitleDefinition.multiplier
       : 0;
+  const selectedSaleValuation =
+    titleActionModal?.kind === 'SALE'
+      ? getPurchasedTitleValuation(titleActionModal.purchasedTitle)
+      : null;
+
+  useEffect(() => {
+    if (titleActionModal?.kind !== 'SALE') {
+      return;
+    }
+
+    if (saleMode === 'BANK') {
+      saleForm.setFieldValue('amount', selectedSaleValuation?.bankSaleValue);
+      saleForm.setFieldValue('buyerPlayerId', undefined);
+    }
+  }, [saleForm, saleMode, selectedSaleValuation?.bankSaleValue, titleActionModal]);
 
   if (!code || !playerId) {
     return <Navigate to="/" replace />;
@@ -806,8 +1048,10 @@ export function GameRoom() {
       chargeForm.resetFields();
       saleForm.resetFields();
       debtPaymentForm.resetFields();
+      cancelChargeForm.resetFields();
       setTitleActionModal(null);
       setDebtPaymentModal(null);
+      setIsCancelChargeModalOpen(false);
       setSelectedTitleId(undefined);
       setSelectedDiceCount(undefined);
     } catch (error) {
@@ -970,7 +1214,7 @@ export function GameRoom() {
         bankLoanAmount,
       )} e criar uma dívida ativa de ${formatCurrency(
         bankLoanDebtAmount,
-      )}, incluindo ${formatCurrency(BANK_LOAN_INTEREST_AMOUNT)} de juros.`,
+      )}, incluindo ${BANK_LOAN_INTEREST_RATE}% de juros.`,
       okText: 'Confirmar',
       cancelText: 'Cancelar',
       onOk: () =>
@@ -1011,6 +1255,11 @@ export function GameRoom() {
       return;
     }
 
+    if (isDebtPurchaseBlocked) {
+      message.error('Quite seus débitos antes de comprar títulos.');
+      return;
+    }
+
     void executeAction(
       () =>
         requestTitlePurchase({
@@ -1039,6 +1288,11 @@ export function GameRoom() {
 
     if ((currentPlayer?.balance ?? 0) < amount) {
       message.error('Saldo insuficiente.');
+      return;
+    }
+
+    if (isDebtPurchaseBlocked) {
+      message.error('Quite seus débitos antes de comprar casas ou hotéis.');
       return;
     }
 
@@ -1124,6 +1378,19 @@ export function GameRoom() {
 
     const values = await saleForm.validateFields();
 
+    if (values.mode === 'BANK') {
+      await executeAction(
+        () =>
+          sellTitleToBank({
+            roomId: currentPlayer?.room_id ?? '',
+            sellerPlayerId: playerId,
+            purchasedTitleId: titleActionModal.purchasedTitle.id,
+          }),
+        'Título vendido ao banco.',
+      );
+      return;
+    }
+
     await executeAction(
       () =>
         createTitleSaleRequest({
@@ -1165,6 +1432,40 @@ export function GameRoom() {
         }),
       'Solicitação recusada.',
     );
+  };
+
+  const handleOpenCancelChargeModal = () => {
+    cancelChargeForm.resetFields();
+    setIsCancelChargeModalOpen(true);
+  };
+
+  const handleCancelPendingCharge = async () => {
+    if (!activePendingRequest) {
+      return;
+    }
+
+    const values = await cancelChargeForm.validateFields();
+
+    if (!MASTER_DELETE_PASSWORD) {
+      message.error('Senha mestra não configurada.');
+      return;
+    }
+
+    if (values.masterPassword !== MASTER_DELETE_PASSWORD) {
+      message.error('Senha mestra inválida.');
+      return;
+    }
+
+    await executeAction(
+      () =>
+        cancelPendingChargeRequest({
+          requestId: activePendingRequest.id,
+          executedByPlayerId: playerId,
+        }),
+      'Cobrança cancelada.',
+    );
+    setIsCancelChargeModalOpen(false);
+    cancelChargeForm.resetFields();
   };
 
   const handleDeleteRoom = () => {
@@ -1249,11 +1550,17 @@ export function GameRoom() {
     {
       title: 'Motivo',
       dataIndex: 'reason',
-      responsive: ['md'],
       render: (reason: string | null) => reason || 'Sem motivo',
     },
     {
-      title: 'Valor',
+      title: 'Original',
+      dataIndex: 'original_amount',
+      align: 'right',
+      responsive: ['md'],
+      render: (originalAmount: number) => formatCurrency(originalAmount),
+    },
+    {
+      title: 'Pendente',
       dataIndex: 'remaining_amount',
       align: 'right',
       render: (remainingAmount: number) => (
@@ -1261,6 +1568,12 @@ export function GameRoom() {
           {formatCurrency(remainingAmount)}
         </Typography.Text>
       ),
+    },
+    {
+      title: 'Atualização',
+      dataIndex: 'updated_at',
+      responsive: ['lg'],
+      render: (updatedAt: string) => formatDateTime(updatedAt),
     },
   ];
   const personalDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
@@ -1279,9 +1592,24 @@ export function GameRoom() {
       ),
     },
   ];
-  const personalReceivableColumns = debtColumns.filter(
-    (column) => !('dataIndex' in column) || column.dataIndex !== 'to_player_id',
-  );
+  const personalReceivableColumns: ColumnsType<FirebaseRecord<Debt>> =
+    debtColumns
+      .filter(
+        (column) =>
+          !('dataIndex' in column) || column.dataIndex !== 'to_player_id',
+      )
+      .map((column) =>
+        'dataIndex' in column && column.dataIndex === 'remaining_amount'
+          ? {
+              ...column,
+              render: (remainingAmount: number) => (
+                <Typography.Text type="success" strong>
+                  {formatCurrency(remainingAmount)}
+                </Typography.Text>
+              ),
+            }
+          : column,
+      );
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
       title: 'Devedor / Credor',
@@ -1295,11 +1623,17 @@ export function GameRoom() {
     {
       title: 'Motivo',
       dataIndex: 'reason',
-      responsive: ['md'],
       render: (reason: string | null) => reason || 'Sem motivo',
     },
     {
-      title: 'Valor',
+      title: 'Original',
+      dataIndex: 'original_amount',
+      align: 'right',
+      responsive: ['md'],
+      render: (originalAmount: number) => formatCurrency(originalAmount),
+    },
+    {
+      title: 'Pendente',
       dataIndex: 'remaining_amount',
       align: 'right',
       render: (remainingAmount: number) => (
@@ -1307,6 +1641,12 @@ export function GameRoom() {
           {formatCurrency(remainingAmount)}
         </Typography.Text>
       ),
+    },
+    {
+      title: 'Atualização',
+      dataIndex: 'updated_at',
+      responsive: ['lg'],
+      render: (updatedAt: string) => formatDateTime(updatedAt),
     },
   ];
   const jailColumns: ColumnsType<FirebaseRecord<Player>> = [
@@ -1520,6 +1860,7 @@ export function GameRoom() {
                 <Button
                   onClick={() => {
                     saleForm.resetFields();
+                    saleForm.setFieldValue('mode', 'PLAYER');
                     setTitleActionModal({
                       kind: 'SALE',
                       purchasedTitle: title,
@@ -1592,6 +1933,8 @@ export function GameRoom() {
               <Button
                 icon={<LuHouse />}
                 disabled={
+                  isCurrentPlayerJailed ||
+                  isDebtPurchaseBlocked ||
                   title.has_hotel ||
                   title.houses >= 4 ||
                   (currentPlayer?.balance ?? 0) <
@@ -1606,6 +1949,8 @@ export function GameRoom() {
               <Button
                 icon={<LuHotel />}
                 disabled={
+                  isCurrentPlayerJailed ||
+                  isDebtPurchaseBlocked ||
                   title.has_hotel ||
                   title.houses !== 4 ||
                   (currentPlayer?.balance ?? 0) <
@@ -1631,6 +1976,7 @@ export function GameRoom() {
               <Button
                 onClick={() => {
                   saleForm.resetFields();
+                  saleForm.setFieldValue('mode', 'PLAYER');
                   setTitleActionModal({ kind: 'SALE', purchasedTitle: title });
                 }}
                 style={{ flex: 1 }}
@@ -1666,7 +2012,6 @@ export function GameRoom() {
         isNavigatorTab ? (
           <Button
             aria-label="Abrir calculadora"
-            disabled={isCurrentPlayerJailed}
             icon={<LuCalculator />}
             onClick={() => setActiveTabKey('calculator')}
           />
@@ -1684,55 +2029,14 @@ export function GameRoom() {
               children: (
                 <Row gutter={[16, 16]}>
                   <Col xs={24} lg={16}>
-                    <Card loading={isLoading}>
-                      <Flex justify="space-between" gap={16} wrap="wrap">
-                        <Flex vertical gap={4}>
-                          <Typography.Title level={4} style={{ margin: 0 }}>
-                            {currentPlayer?.name}
-                          </Typography.Title>
-                          {currentPlayer?.is_banker ? (
-                            <Tag color="gold" style={{ width: 'fit-content' }}>
-                              Banqueiro
-                            </Tag>
-                          ) : null}
-                        </Flex>
-                        <Flex vertical align="flex-end" gap={4}>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: 12 }}
-                          >
-                            Saldo atual
-                          </Typography.Text>
-                          <Typography.Title level={4} style={{ margin: 0 }}>
-                            {formatCurrency(currentPlayer?.balance ?? 0)}
-                          </Typography.Title>
-                          <Typography.Text
-                            type="secondary"
-                            style={{ fontSize: 12 }}
-                          >
-                            Patrimônio:{' '}
-                            {formatCurrency(currentPlayerAssetValue)}
-                          </Typography.Text>
-                          {currentPlayerDebtTotal > 0 ? (
-                            <Typography.Text
-                              type="danger"
-                              style={{ fontSize: 12 }}
-                            >
-                              Dívidas: {formatCurrency(currentPlayerDebtTotal)}
-                            </Typography.Text>
-                          ) : null}
-                          {currentPlayerReceivableTotal > 0 ? (
-                            <Typography.Text
-                              type="success"
-                              style={{ fontSize: 12 }}
-                            >
-                              A receber:{' '}
-                              {formatCurrency(currentPlayerReceivableTotal)}
-                            </Typography.Text>
-                          ) : null}
-                        </Flex>
-                      </Flex>
-                    </Card>
+                    <PlayerFinancialSummary
+                      player={currentPlayer}
+                      assetValue={currentPlayerAssetValue}
+                      debtTotal={currentPlayerDebtTotal}
+                      receivableTotal={currentPlayerReceivableTotal}
+                      debtStage={currentDebtStage}
+                      isLoading={isLoading}
+                    />
                   </Col>
 
                   <Col xs={24} lg={12}>
@@ -1818,6 +2122,16 @@ export function GameRoom() {
               label: 'Empréstimos',
               children: (
                 <Row gutter={[16, 16]}>
+                  <Col xs={24} lg={16}>
+                    <PlayerFinancialSummary
+                      player={currentPlayer}
+                      assetValue={currentPlayerAssetValue}
+                      debtTotal={currentPlayerDebtTotal}
+                      receivableTotal={currentPlayerReceivableTotal}
+                      debtStage={currentDebtStage}
+                      isLoading={isLoading}
+                    />
+                  </Col>
                   <Col xs={24} lg={10}>
                     <Card title="Empréstimo do banco">
                       <Flex vertical gap={12}>
@@ -1829,7 +2143,7 @@ export function GameRoom() {
                             {formatCurrency(bankLoanAmount)}
                           </Descriptions.Item>
                           <Descriptions.Item label="Juros">
-                            {formatCurrency(BANK_LOAN_INTEREST_AMOUNT)}
+                            {BANK_LOAN_INTEREST_RATE}%
                           </Descriptions.Item>
                           <Descriptions.Item label="Total da dívida">
                             {formatCurrency(bankLoanDebtAmount)}
@@ -1887,23 +2201,47 @@ export function GameRoom() {
                             prefix="R$"
                           />
                         </Form.Item>
-                        <Form.Item
-                          name="repaymentAmount"
-                          label="Valor que será pago"
-                          rules={[
-                            {
-                              required: true,
-                              message: 'Informe o valor a pagar.',
-                            },
-                          ]}
-                        >
-                          <InputNumber
-                            min={1}
-                            precision={2}
-                            style={{ width: '100%' }}
-                            prefix="R$"
-                          />
-                        </Form.Item>
+                        <Row gutter={12}>
+                          <Col xs={12}>
+                            <Form.Item
+                              name="interestRate"
+                              label="Taxa de juros"
+                              rules={[
+                                {
+                                  required: true,
+                                  message: 'Informe a taxa de juros.',
+                                },
+                              ]}
+                            >
+                              <InputNumber
+                                min={0}
+                                precision={2}
+                                style={{ width: '100%' }}
+                                suffix="%"
+                              />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={12}>
+                            <Form.Item
+                              name="repaymentAmount"
+                              label="Total a pagar"
+                              rules={[
+                                {
+                                  required: true,
+                                  message: 'Informe o valor a pagar.',
+                                },
+                              ]}
+                            >
+                              <InputNumber
+                                disabled
+                                min={1}
+                                precision={2}
+                                style={{ width: '100%' }}
+                                prefix="R$"
+                              />
+                            </Form.Item>
+                          </Col>
+                        </Row>
                         <Flex>
                           <Button
                             type="primary"
@@ -1925,6 +2263,32 @@ export function GameRoom() {
               label: 'Títulos',
               children: (
                 <Flex vertical gap={16}>
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={16}>
+                      <PlayerFinancialSummary
+                        player={currentPlayer}
+                        assetValue={currentPlayerAssetValue}
+                        debtTotal={currentPlayerDebtTotal}
+                        receivableTotal={currentPlayerReceivableTotal}
+                        debtStage={currentDebtStage}
+                        isLoading={isLoading}
+                      />
+                    </Col>
+                  </Row>
+                  {currentDebtStage > 0 ? (
+                    <Alert
+                      type={currentDebtStage === 3 ? 'error' : 'warning'}
+                      showIcon
+                      title={getDebtStageLabel(currentDebtStage)}
+                      description={
+                        currentDebtStage === 1
+                          ? 'Quite seus débitos antes de comprar títulos, casas ou hotéis.'
+                          : currentDebtStage === 2
+                            ? 'Sua dívida atingiu nível de risco de falência. Venda propriedades ou quite débitos.'
+                            : 'Você está em recuperação judicial. Venda propriedades para reduzir suas dívidas.'
+                      }
+                    />
+                  ) : null}
                   <Row gutter={[16, 16]}>
                     <Col xs={24} lg={12}>
                       <Card title="Aquisição de títulos">
@@ -1960,8 +2324,10 @@ export function GameRoom() {
                           {selectedTitle ? (
                             <Alert
                               type={
+                                isDebtPurchaseBlocked ||
+                                isCurrentPlayerJailed ||
                                 (currentPlayer?.balance ?? 0) <
-                                selectedTitle.purchase_price
+                                  selectedTitle.purchase_price
                                   ? 'error'
                                   : 'info'
                               }
@@ -1970,10 +2336,14 @@ export function GameRoom() {
                                 selectedTitle.purchase_price,
                               )}`}
                               description={
-                                (currentPlayer?.balance ?? 0) >=
-                                selectedTitle.purchase_price
-                                  ? 'Depois de pedir, confirme a compra para ganhar o título.'
-                                  : 'Saldo insuficiente.'
+                                isCurrentPlayerJailed
+                                  ? 'Você está preso e não pode comprar títulos.'
+                                  : isDebtPurchaseBlocked
+                                    ? 'Quite seus débitos antes de comprar títulos.'
+                                    : (currentPlayer?.balance ?? 0) >=
+                                        selectedTitle.purchase_price
+                                      ? 'Depois de pedir, confirme a compra para ganhar o título.'
+                                      : 'Saldo insuficiente.'
                               }
                               style={{ marginBottom: 16 }}
                             />
@@ -1982,6 +2352,9 @@ export function GameRoom() {
                             <Button
                               type="primary"
                               htmlType="submit"
+                              disabled={
+                                isCurrentPlayerJailed || isDebtPurchaseBlocked
+                              }
                               loading={isSubmitting}
                               style={{ flex: 1 }}
                             >
@@ -2033,6 +2406,9 @@ export function GameRoom() {
                 <Row gutter={[16, 16]}>
                   <Col xs={24} lg={10}>
                     <Calculator />
+                  </Col>
+                  <Col xs={24} lg={10}>
+                    <InterestCalculator />
                   </Col>
                 </Row>
               ),
@@ -2221,15 +2597,11 @@ export function GameRoom() {
       >
         {navigationItems.map((item) => {
           const isSelected = activeTabKey === item.key;
-          const isDisabled =
-            isCurrentPlayerJailed &&
-            !(currentPlayer?.is_banker && item.key === 'banker');
 
           return (
             <button
               key={item.key}
               type="button"
-              disabled={isDisabled}
               aria-current={isSelected ? 'page' : undefined}
               onClick={() => setActiveTabKey(item.key)}
               style={{
@@ -2244,8 +2616,7 @@ export function GameRoom() {
                 borderRadius: 8,
                 background: isSelected ? 'rgba(216, 24, 96, 0.1)' : 'none',
                 color: isSelected ? '#d81860' : 'rgba(0, 0, 0, 0.62)',
-                opacity: isDisabled ? 0.42 : 1,
-                cursor: isDisabled ? 'not-allowed' : 'pointer',
+                cursor: 'pointer',
               }}
             >
               <span style={{ display: 'flex', fontSize: 22 }}>{item.icon}</span>
@@ -2323,6 +2694,41 @@ export function GameRoom() {
         </Flex>
       ) : null}
 
+      {shouldShowJudicialRecoveryBackdrop && currentPlayer ? (
+        <Flex
+          vertical
+          align="center"
+          justify="center"
+          gap={16}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 900,
+            padding: 24,
+            background: 'rgba(0, 0, 0, 0.55)',
+            backdropFilter: 'blur(6px)',
+            textAlign: 'center',
+          }}
+        >
+          <LuSkull size={72} color="#fff" aria-hidden />
+          <Typography.Title level={2} style={{ color: '#fff', margin: 0 }}>
+            Recuperação judicial
+          </Typography.Title>
+          <Typography.Text style={{ color: 'rgba(255, 255, 255, 0.82)' }}>
+            Sua dívida chegou ao valor do patrimônio em títulos. Venda
+            propriedades para reduzir os débitos.
+          </Typography.Text>
+          <Button
+            size="large"
+            type="primary"
+            icon={<LuScrollText />}
+            onClick={() => setActiveTabKey('titles')}
+          >
+            Ir para títulos
+          </Button>
+        </Flex>
+      ) : null}
+
       <Modal
         open={Boolean(activePendingRequest)}
         title={getPendingRequestTitle()}
@@ -2332,13 +2738,21 @@ export function GameRoom() {
         footer={
           activePendingRequest?.kind === 'RENT_CHARGE' ||
           activePendingRequest?.kind === 'STOCK_CHARGE' ? (
-            <Button
-              type="primary"
-              loading={isSubmitting}
-              onClick={handleAcceptPendingRequest}
-            >
-              Aceitar e confirmar pagamento
-            </Button>
+            <Space>
+              <Button
+                danger
+                aria-label="Cancelar cobrança"
+                icon={<LuX />}
+                onClick={handleOpenCancelChargeModal}
+              />
+              <Button
+                type="primary"
+                loading={isSubmitting}
+                onClick={handleAcceptPendingRequest}
+              >
+                Aceitar e confirmar pagamento
+              </Button>
+            </Space>
           ) : (
             <Space>
               <Button
@@ -2360,6 +2774,36 @@ export function GameRoom() {
         }
       >
         {renderPendingRequestDescription()}
+      </Modal>
+
+      <Modal
+        open={isCancelChargeModalOpen}
+        title="Cancelar cobrança?"
+        onCancel={() => setIsCancelChargeModalOpen(false)}
+        footer={
+          <Space>
+            <Button onClick={() => setIsCancelChargeModalOpen(false)}>
+              Voltar
+            </Button>
+            <Button
+              danger
+              loading={isSubmitting}
+              onClick={() => void handleCancelPendingCharge()}
+            >
+              Cancelar operação
+            </Button>
+          </Space>
+        }
+      >
+        <Form form={cancelChargeForm} layout="vertical" requiredMark={false}>
+          <Form.Item
+            name="masterPassword"
+            label="Senha mestra"
+            rules={[{ required: true, message: 'Informe a senha mestra.' }]}
+          >
+            <Input.Password placeholder="Digite a senha mestra" />
+          </Form.Item>
+        </Form>
       </Modal>
 
       <Modal
@@ -2473,7 +2917,7 @@ export function GameRoom() {
                 loading={isSubmitting}
                 onClick={() => void handleCreateTitleSale()}
               >
-                Enviar proposta
+                {saleMode === 'BANK' ? 'Vender ao banco' : 'Enviar proposta'}
               </Button>
             </Space>
           ) : (
@@ -2493,23 +2937,93 @@ export function GameRoom() {
         }
       >
         {titleActionModal?.kind === 'SALE' ? (
-          <Form form={saleForm} layout="vertical" requiredMark={false}>
+          <Form
+            form={saleForm}
+            layout="vertical"
+            requiredMark={false}
+            initialValues={{ mode: 'PLAYER' }}
+          >
+            {selectedSaleValuation ? (
+              <Flex vertical gap={12} style={{ marginBottom: 16 }}>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="Título">
+                    {selectedSaleValuation.definition.name}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Tipo">
+                    {selectedSaleValuation.definition.kind === 'LAND'
+                      ? 'Terreno'
+                      : 'Ação'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Valor base">
+                    {formatCurrency(selectedSaleValuation.baseValue)}
+                  </Descriptions.Item>
+                  {selectedSaleValuation.improvements.length > 0 ? (
+                    selectedSaleValuation.improvements.map((improvement) => (
+                      <Descriptions.Item
+                        key={improvement.label}
+                        label={improvement.label}
+                      >
+                        {formatCurrency(improvement.amount)}
+                      </Descriptions.Item>
+                    ))
+                  ) : (
+                    <Descriptions.Item label="Valores agregados">
+                      Sem melhorias
+                    </Descriptions.Item>
+                  )}
+                  <Descriptions.Item label="Valor estimado">
+                    <Typography.Text strong>
+                      {formatCurrency(selectedSaleValuation.totalValue)}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Banco paga 75%">
+                    <Typography.Text type="success" strong>
+                      {formatCurrency(selectedSaleValuation.bankSaleValue)}
+                    </Typography.Text>
+                  </Descriptions.Item>
+                </Descriptions>
+              </Flex>
+            ) : null}
+            <Form.Item name="mode" label="Destino da venda">
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                options={[
+                  { label: 'Outro jogador', value: 'PLAYER' },
+                  { label: 'Banco', value: 'BANK' },
+                ]}
+              />
+            </Form.Item>
             <Form.Item
               name="buyerPlayerId"
               label="Comprador"
-              rules={[{ required: true, message: 'Escolha o comprador.' }]}
+              rules={[
+                {
+                  validator: (_, value?: string) => {
+                    if (saleMode === 'BANK' || value) {
+                      return Promise.resolve();
+                    }
+
+                    return Promise.reject(
+                      new Error('Escolha o comprador.'),
+                    );
+                  },
+                },
+              ]}
             >
               <Select
+                disabled={saleMode === 'BANK'}
                 options={playerOptions}
                 placeholder="Selecione um jogador"
               />
             </Form.Item>
             <Form.Item
               name="amount"
-              label="Valor da proposta"
+              label={saleMode === 'BANK' ? 'Valor pago pelo banco' : 'Valor da proposta'}
               rules={[{ required: true, message: 'Informe o valor.' }]}
             >
               <InputNumber
+                disabled={saleMode === 'BANK'}
                 min={1}
                 precision={2}
                 style={{ width: '100%' }}
