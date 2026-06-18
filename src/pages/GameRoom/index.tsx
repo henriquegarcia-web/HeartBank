@@ -1037,11 +1037,6 @@ export function GameRoom() {
           : definition.acquisition.hotel_price
         : 0;
 
-    if (currentPlayerDebtTotal > 0) {
-      message.error('Quite suas dívidas antes de comprar casas ou hotel.');
-      return;
-    }
-
     if ((currentPlayer?.balance ?? 0) < amount) {
       message.error('Saldo insuficiente.');
       return;
@@ -1599,7 +1594,6 @@ export function GameRoom() {
                 disabled={
                   title.has_hotel ||
                   title.houses >= 4 ||
-                  currentPlayerDebtTotal > 0 ||
                   (currentPlayer?.balance ?? 0) <
                     definition.acquisition.house_price
                 }
@@ -1614,7 +1608,6 @@ export function GameRoom() {
                 disabled={
                   title.has_hotel ||
                   title.houses !== 4 ||
-                  currentPlayerDebtTotal > 0 ||
                   (currentPlayer?.balance ?? 0) <
                     definition.acquisition.hotel_price
                 }
