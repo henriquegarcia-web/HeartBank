@@ -1697,6 +1697,64 @@ export const payDebt = async ({
   await update(ref(realtimeDatabase), updates);
 };
 
+export const forgiveDebt = async ({
+  roomId,
+  debtId,
+  executedByPlayerId,
+}: {
+  roomId: string;
+  debtId: string;
+  executedByPlayerId: string;
+}) => {
+  const debtSnapshot = await get(ref(realtimeDatabase, `debts/${debtId}`));
+
+  if (!debtSnapshot.exists()) {
+    throw new GameError('Dívida não encontrada.');
+  }
+
+  const debt = {
+    id: debtId,
+    ...(debtSnapshot.val() as Debt),
+  };
+
+  if (debt.room_id !== roomId || debt.remaining_amount <= 0) {
+    throw new GameError('Dívida inválida para esta sala.');
+  }
+
+  if (!debt.to_player_id) {
+    throw new GameError('Apenas dívidas entre jogadores podem ser perdoadas.');
+  }
+
+  if (debt.to_player_id !== executedByPlayerId) {
+    throw new GameError('Apenas o credor pode perdoar esta dívida.');
+  }
+
+  const [debtor, creditor] = await Promise.all([
+    getPlayer(debt.from_player_id),
+    getPlayer(debt.to_player_id),
+  ]);
+  const forgivenAmount = roundMoney(debt.remaining_amount);
+  const updates: Record<string, unknown> = {
+    [`rooms/${roomId}/last_played_at`]: now(),
+    [`debts/${debt.id}/remaining_amount`]: 0,
+    [`debts/${debt.id}/updated_at`]: now(),
+  };
+
+  assertPlayerInRoom(debtor, roomId);
+  assertPlayerInRoom(creditor, roomId);
+
+  addTransactionToUpdates(updates, {
+    room_id: roomId,
+    type: 'DEBT_FORGIVEN',
+    amount: forgivenAmount,
+    from_player_id: debtor.id,
+    to_player_id: creditor.id,
+    executed_by_player_id: executedByPlayerId,
+    reason: `Perdão de dívida${debt.reason ? ` - ${debt.reason}` : ''}`,
+  });
+
+  await update(ref(realtimeDatabase), updates);
+};
 export const createBankLoan = async ({
   roomId,
   playerId,

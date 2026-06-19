@@ -12,6 +12,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popconfirm,
   Radio,
   Row,
   Select,
@@ -32,6 +33,7 @@ import {
   LuArrowLeft,
   LuArrowUp,
   LuCheck,
+  LuBadgeCheck,
   LuCalculator,
   LuCircleDollarSign,
   LuCircle,
@@ -61,6 +63,7 @@ import {
   acceptPendingRequest,
   cancelPendingChargeRequest,
   confirmPendingNews,
+  forgiveDebt,
   createBankLoan,
   createPlayerLoanRequest,
   createTitleSaleRequest,
@@ -263,6 +266,10 @@ const getTransactionSignal = (
   transaction: FirebaseRecord<Transaction>,
   perspectivePlayerId?: string,
 ) => {
+  if (transaction.type === 'DEBT_FORGIVEN') {
+    return 'forgiven';
+  }
+
   if (perspectivePlayerId) {
     return transaction.to_player_id === perspectivePlayerId ? '+' : '-';
   }
@@ -569,10 +576,14 @@ function TransactionHistoryList({
               style={{ width: '100%' }}
             >
               <Tag
-                color={signal === '+' ? 'green' : 'red'}
+                color={
+                  signal === 'forgiven' ? 'blue' : signal === '+' ? 'green' : 'red'
+                }
                 style={{ fontSize: 10 }}
               >
-                {signal} {formatCurrency(transaction.amount)}
+                {signal === 'forgiven'
+                  ? `Perdoado ${formatCurrency(transaction.amount)}`
+                  : `${signal} ${formatCurrency(transaction.amount)}`}
               </Tag>
               <Typography.Text
                 style={{
@@ -1027,6 +1038,7 @@ export function GameRoom() {
       (transaction) =>
         !seenTransactionIdsRef.current.has(transaction.id) &&
         transaction.to_player_id === playerId &&
+        transaction.type !== 'DEBT_FORGIVEN' &&
         transaction.amount > 0,
     );
 
@@ -1728,6 +1740,16 @@ export function GameRoom() {
       nextCurrentPlayerSpaceUpgrade,
     );
   };
+  const handleForgiveDebt = (debt: FirebaseRecord<Debt>) =>
+    executeAction(
+      () =>
+        forgiveDebt({
+          roomId: currentPlayer?.room_id ?? '',
+          debtId: debt.id,
+          executedByPlayerId: playerId,
+        }),
+      'Dívida perdoada.',
+    );
   const handlePayDebt = async () => {
     if (!debtPaymentModal) {
       return;
@@ -1989,8 +2011,8 @@ export function GameRoom() {
       ),
     },
   ];
-  const personalReceivableColumns: ColumnsType<FirebaseRecord<Debt>> =
-    debtColumns
+  const personalReceivableColumns: ColumnsType<FirebaseRecord<Debt>> = [
+    ...debtColumns
       .filter(
         (column) =>
           !('dataIndex' in column) || column.dataIndex !== 'to_player_id',
@@ -2015,7 +2037,28 @@ export function GameRoom() {
                   ),
               }
             : column,
-      );
+      ),
+    {
+      title: '',
+      key: 'forgiveDebt',
+      align: 'right',
+      render: (_, debt) => (
+        <Popconfirm
+          title="Perdoar dívida?"
+          description="A dívida será zerada e o perdão aparecerá no histórico."
+          okText="Perdoar"
+          cancelText="Cancelar"
+          onConfirm={() => void handleForgiveDebt(debt)}
+        >
+          <Button
+            aria-label="Perdoar dívida"
+            size="small"
+            icon={<LuBadgeCheck />}
+          />
+        </Popconfirm>
+      ),
+    },
+  ];
   const bankerDebtColumns: ColumnsType<FirebaseRecord<Debt>> = [
     {
       title: 'Devedor / Credor',

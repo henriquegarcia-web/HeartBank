@@ -2,7 +2,8 @@ export type TransactionType =
   | 'PLAYER_TO_PLAYER'
   | 'PLAYER_TO_BANK'
   | 'BANK_TO_PLAYER'
-  | 'BANK_CHARGE_PLAYER';
+  | 'BANK_CHARGE_PLAYER'
+  | 'DEBT_FORGIVEN';
 
 export type TitleKind = 'LAND' | 'STOCK';
 
